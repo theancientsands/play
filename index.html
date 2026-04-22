@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Ancient Sands Test</title>
+    <style>
+       body { margin: 0; overflow: hidden; background: #000000; }
+		canvas { display: block; }
+
+		/* --- THE ANCIENT SANDS INTRO OVERLAY --- */
+		#intro-overlay {
+			position: fixed;
+			top: 0; left: 0; width: 100%; height: 100%;
+			background: black;
+			display: flex; justify-content: center; align-items: center;
+			z-index: 9999; 
+			transition: opacity 2.5s ease;
+			}
+		
+		.logo-container {
+    position: relative;
+    opacity: 0;
+    transition: opacity 2s ease;
+    
+    /* The mask does all the heavy lifting now */
+    -webkit-mask-image: url('./media/theancientsands.png');
+    mask-image: url('./media/theancientsands.png');
+    -webkit-mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+}
+
+.logo-container img {
+    display: block;
+    max-width: 80vw;
+    visibility: visible; /* Ensure it's not hidden */
+}
+
+		.shine {
+			position: absolute;
+			top: 0; 
+			left: -150%;
+			width: 100%; /* Wider shine for better coverage */
+			height: 100%;
+			background: linear-gradient(
+				to right, 
+				rgba(255,255,255,0) 0%, 
+				rgba(255,255,255,0.9) 50%, 
+				rgba(255,255,255,0) 100%
+			);
+			transform: skewX(-25deg);
+			pointer-events: none;
+		}
+
+		.fade-in { opacity: 1 !important; }
+		.run-shine { animation: shine-anim 3.0s ease-in-out forwards; }
+
+		@keyframes shine-anim {
+			0% { left: -150%; }
+			100% { left: 150%; }
+		}
+    </style>
+</head>
+<body>
+<div id="intro-overlay">
+        <div class="logo-container">
+            <img src="./media/theancientsands.png" id="game-logo" alt="The Ancient Sands Logo" style="max-width: 80vw;">
+            <div class="shine"></div>
+        </div>
+    </div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const clock = new THREE.Clock();
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.outputColorSpace = THREE.SRGBColorSpace; 
+		
+		renderer.shadowMap.enabled = true;
+		renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer, nicer edges
+		
+        document.body.appendChild(renderer.domElement);
+
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = 10; 
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 0.1, 2000);
+        camera.position.set(100, 100, 100); 
+        camera.lookAt(0, 0, 0);
+        const cameraOffset = new THREE.Vector3().copy(camera.position);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableRotate = false; 
+        controls.enableZoom = true;    
+        controls.enablePan = false; 
+
+        scene.add(new THREE.AmbientLight(0x222233, 0.2)); 
+        const sun = new THREE.DirectionalLight(0x444466, 0.3);
+        sun.position.set(50, 100, 50);
+		
+        scene.add(sun);
+
+        let dwarf, mixer, fireLight, fireParticles, water, lava, lavaLight, waterfallParticles;
+        let animations = {}; 
+        let currentAction;
+		let isMouseDown = false;
+		const mouseCoords = new THREE.Vector2(); // To store the "static" mouse position
+        let targetPosition = new THREE.Vector3(0, 0, 0);
+        const moveSpeed = 0.2;
+        const collisionObjects = [];
+
+        const textureLoader = new THREE.TextureLoader();
+        const gltfLoader = new GLTFLoader();
+
+        const groundTex = textureLoader.load('./media/42.bmp');
+        groundTex.colorSpace = THREE.SRGBColorSpace; 
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(300, 300),
+            new THREE.MeshLambertMaterial({ map: groundTex })
+        );
+        ground.rotation.x = -Math.PI / 2;
+		ground.receiveShadow = true; // <--- ADD THIS
+        scene.add(ground);
+		
+		const createDissolveMask = () => {
+			const canvas = document.createElement('canvas');
+			canvas.width = 256;
+			canvas.height = 256;
+			const ctx = canvas.getContext('2d');
+
+			const gradient = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+			gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');   // Center: Fully Opaque
+			gradient.addColorStop(0.7, 'rgba(255, 255, 255, 1)'); // Stay solid most of the way
+			gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');   // Edge: Fully Dissolved
+
+			ctx.fillStyle = gradient;
+			ctx.fillRect(0, 0, 256, 256);
+			
+			const texture = new THREE.CanvasTexture(canvas);
+			return texture;
+		};
+
+        const waterNormals = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg');
+        waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
+		const waterMat = new THREE.MeshPhongMaterial({
+			color: 0x002244,    // Darker base color for more contrast
+			specular: 0x888888, // Grey instead of pure white prevents "blown out" spots
+			shininess: 40,     // Much higher shininess makes the glints sharper/smaller
+			transparent: true,
+			opacity: 0.4,
+			normalMap: waterNormals,
+			normalScale: new THREE.Vector2(0.5, 0.5), // Lower this slightly for more realism
+			blending: THREE.NormalBlending,
+			depthWrite: false
+		});
+		
+        water = new THREE.Mesh(new THREE.CircleGeometry(15, 64), waterMat);
+        water.rotation.x = -Math.PI / 2;
+        water.position.set(5, 1.2, 5); 
+        scene.add(water);
+
+        // --- SHADER LAVA (KEPT IN) ---
+        const lavaTex = textureLoader.load('./media/2.bmp');
+        const noiseTex = textureLoader.load('https://threejs.org/examples/textures/disturb.jpg'); 
+        lavaTex.wrapS = lavaTex.wrapT = THREE.RepeatWrapping;
+        noiseTex.wrapS = noiseTex.wrapT = THREE.RepeatWrapping;
+
+        const lavaMat = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uLavaTexture: { value: lavaTex },
+                uNoiseTexture: { value: noiseTex },
+                uEmissiveColor: { value: new THREE.Color(0xff3300) }
+            },
+            vertexShader: `
+                uniform float uTime;
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    vec3 pos = position;
+                    float wave = sin(pos.x * 0.3 + uTime * 1.5) * 0.4;
+                    float ripple = cos(pos.y * 0.4 + uTime * 1.2) * 0.2;
+                    pos.z += wave + ripple;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float uTime;
+                uniform sampler2D uLavaTexture;
+                uniform sampler2D uNoiseTexture;
+                uniform vec3 uEmissiveColor;
+                varying vec2 vUv;
+                void main() {
+                    vec2 noiseUv = vUv * 1.5;
+                    noiseUv.y -= uTime * 0.1;
+                    vec4 noise = texture2D(uNoiseTexture, noiseUv);
+                    vec2 distUv = vUv;
+                    distUv.x += (noise.r - 0.5) * 0.05;
+                    distUv.y += (noise.g - 0.5) * 0.05 + uTime * 0.01;
+                    vec4 color = texture2D(uLavaTexture, distUv);
+                    float glow = 0.4 + sin(uTime * 0.8) * 0.15;
+                    gl_FragColor = vec4(color.rgb + (uEmissiveColor * glow * color.r), 1.0);
+                }
+            `
+        });
+
+        lava = new THREE.Mesh(new THREE.PlaneGeometry(30, 30, 64, 64), lavaMat);
+        lava.rotation.x = -Math.PI / 2;
+        lava.position.set(-40, 1.0, -40); 
+        scene.add(lava);
+
+        lavaLight = new THREE.PointLight(0xff3300, 30, 100, 1.2);
+        lavaLight.position.set(-40, 8, -40);
+        scene.add(lavaLight);
+		
+		//WATERFALL PARTICLES
+		
+		function createWaterfall() {
+			const count = 40; // Fewer, larger blobs for a "cloudy" waterfall
+			const geometry = new THREE.BufferGeometry();
+			const positions = new Float32Array(count * 3);
+			const velocities = new Float32Array(count);
+
+			for (let i = 0; i < count; i++) {
+				// Centered at 0, 0, 0 locally
+				positions[i * 3] = (Math.random() - 0.5) * 15; 
+				positions[i * 3 + 1] = Math.random() * 30; 
+				positions[i * 3 + 2] = (Math.random() - 0.5) * 5;
+				velocities[i] = 0.15 + Math.random() * 0.25;
+			}
+
+			geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+			const canvas = document.createElement('canvas');
+			canvas.width = 128; canvas.height = 128;
+			const ctx = canvas.getContext('2d');
+			const grad = ctx.createRadialGradient(64, 64, 5, 64, 64, 64);
+			grad.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+			grad.addColorStop(0.2, 'rgba(180, 220, 255, 0.6)');
+			grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+			ctx.fillStyle = grad;
+			ctx.fillRect(0, 0, 128, 128);
+
+			const material = new THREE.PointsMaterial({
+				size: 800, // This is our "Master Size"
+				map: new THREE.CanvasTexture(canvas),
+				transparent: true,
+				opacity: 0.3,
+				blending: THREE.AdditiveBlending,
+				depthWrite: false,
+				sizeAttenuation: false 
+			});
+
+			const points = new THREE.Points(geometry, material);
+			points.userData = { velocities };
+			points.frustumCulled = false; 
+			
+			return points;
+		}
+
+		// Add to scene
+		waterfallParticles = createWaterfall();
+		waterfallParticles.position.set(10, 0, -8);
+		scene.add(waterfallParticles);
+		
+		// 1. THE VERTEX SHADER (The "Math" that stops the stretching)
+		const grassVertexShader = `
+			varying vec2 vUv;
+			uniform float uTime;
+			uniform vec3 uPlayerPosition;
+			uniform float uRadius;
+			
+			void main() {
+				vUv = uv;
+				
+				// Calculate the world position of the root of this blade
+				// This keeps the entire blade moving as one solid unit
+				vec4 worldRoot = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+				
+				// Get the local vertex position WITH its instance rotation/scale applied
+				vec4 localPos = instanceMatrix * vec4(position, 1.0);
+				
+				// --- BEND CALCULATION ---
+				vec3 dirToPlayer = worldRoot.xyz - uPlayerPosition;
+				float dist = length(vec2(dirToPlayer.x, dirToPlayer.z));
+				
+				if (dist < uRadius) {
+					// How violent the push is (0 to 1)
+					float force = pow(1.0 - dist / uRadius, 2.0);
+					
+					// Push direction in World Space
+					vec2 push = normalize(vec2(dirToPlayer.x, dirToPlayer.z)) * force * 2.2;
+
+					// Apply push to the already-rotated blade
+					// Multiplying by uv.y ensures the root (bottom) never moves
+					localPos.x += push.x * uv.y;
+					localPos.z += push.y * uv.y;
+					
+					// "Step on" logic: Squeeze the Y height slightly as it leans
+					localPos.y *= (1.0 - force * 0.6);
+				}
+
+				// --- WIND ---
+				float sway = sin(uTime * 2.0 + worldRoot.x * 0.5) * 0.12;
+				localPos.x += sway * uv.y;
+
+				// Final Projection (Use localPos, NOT position)
+				gl_Position = projectionMatrix * modelViewMatrix * localPos;
+			}
+		`;
+
+		// 2. THE FRAGMENT SHADER (The "Look")
+		const grassFragmentShader = `
+			varying vec2 vUv;
+			void main() {
+				vec3 baseColor = vec3(0.02, 0.12, 0.02); 
+				vec3 tipColor = vec3(0.3, 0.6, 0.1);
+				float edge = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
+				vec3 finalColor = mix(baseColor, tipColor, vUv.y) * edge;
+				gl_FragColor = vec4(finalColor, 1.0);
+			}
+		`;
+
+		// 3. THE MATERIAL (No hardcoded strings here anymore)
+		const grassMaterial = new THREE.ShaderMaterial({
+			vertexShader: grassVertexShader,
+			fragmentShader: grassFragmentShader,
+			uniforms: {
+				uTime: { value: 0 },
+				uPlayerPosition: { value: new THREE.Vector3(0, 0, 0) },
+				uRadius: { value: 4.5 } // Adjust this to make the "bubble" around you bigger
+			},
+			side: THREE.DoubleSide
+		});
+
+		// 4. THE GENERATOR (Ensures the root is actually at 0,0,0)
+		function createGrassField(totalBlades, fieldSize, clusterCount) {
+			const geometry = new THREE.PlaneGeometry(0.08, 1.2, 1, 4);
+			geometry.translate(0, 0.6, 0); // Crucial: Moves the pivot point to the bottom
+
+			const instancedMesh = new THREE.InstancedMesh(geometry, grassMaterial, totalBlades);
+			const matrix = new THREE.Matrix4();
+
+			const clusters = [];
+			for (let i = 0; i < clusterCount; i++) {
+				clusters.push({
+					x: (Math.random() - 0.5) * fieldSize,
+					z: (Math.random() - 0.5) * fieldSize,
+					radius: 2 + Math.random() * 5
+				});
+			}
+
+			for (let i = 0; i < totalBlades; i++) {
+				const cluster = clusters[Math.floor(Math.random() * clusterCount)];
+				const angle = Math.random() * Math.PI * 2;
+				const dist = Math.random() * cluster.radius;
+				const x = cluster.x + Math.cos(angle) * dist;
+				const z = cluster.z + Math.sin(angle) * dist;
+				
+				const scale = 0.5 + Math.random() * 1.0;
+				const rotation = Math.random() * Math.PI;
+
+				matrix.makeRotationY(rotation);
+				matrix.scale(new THREE.Vector3(scale, scale, scale));
+				matrix.setPosition(x, 1.0, z); // 1.0 should be your ground height
+				
+				instancedMesh.setMatrixAt(i, matrix);
+			}
+
+			return instancedMesh;
+		}
+
+		// totalBlades, fieldSize, clusterCount
+		const grassField = createGrassField(8000, 150, 40); 
+		scene.add(grassField);
+
+        const cpBase = './media/campfire/';
+        const campfireTextures = {
+            terra: { map: textureLoader.load(cpBase + 'Bonfire black terra txtr.png'), normal: textureLoader.load(cpBase + 'Bonfire black terra normal.png') },
+            logs: { map: textureLoader.load(cpBase + 'bonfire logs txtr.png'), normal: textureLoader.load(cpBase + 'bonfire logs normal.png') },
+            stones: { map: textureLoader.load(cpBase + 'stone of bonfire txtr.png'), normal: textureLoader.load(cpBase + 'stone of bonfire normal.png') }
+        };
+
+        Object.values(campfireTextures).forEach(t => {
+            t.map.colorSpace = THREE.SRGBColorSpace;
+            t.map.flipY = false; t.normal.flipY = false;
+        });
+
+        function createFireParticles() {
+            const count = 550;
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            const velocities = new Float32Array(count);
+            const colors = new Float32Array(count * 3); 
+            for (let i = 0; i < count; i++) {
+                positions[i * 3] = 5 + (Math.random() - 0.5) * 2.5; 
+                positions[i * 3 + 1] = 1 + Math.random() * 8; 
+                positions[i * 3 + 2] = 5 + (Math.random() - 0.5) * 2.5;
+                velocities[i] = 0.05 + Math.random() * 0.08;
+                colors[i * 3] = 1.0; colors[i * 3 + 1] = 1.0; colors[i * 3 + 2] = 0.5;
+            }
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.beginPath(); ctx.moveTo(64, 0);
+            ctx.quadraticCurveTo(80, 40, 100, 100); ctx.quadraticCurveTo(64, 128, 28, 100);
+            ctx.quadraticCurveTo(48, 40, 64, 0); ctx.closePath();
+            const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            grad.addColorStop(0.1, 'rgba(255,255,255,1)'); grad.addColorStop(0.3, 'rgba(255,200,0,0.8)');
+            grad.addColorStop(0.6, 'rgba(255,50,0,0.4)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad; ctx.fill();
+            const material = new THREE.PointsMaterial({
+                size: 15.0, map: new THREE.CanvasTexture(canvas), transparent: true,
+                blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true
+            });
+            const points = new THREE.Points(geometry, material);
+            points.userData = { velocities };
+            return points;
+        }
+
+        gltfLoader.load('./media/campfire.glb', (gltf) => {
+            const campfire = gltf.scene;
+            campfire.position.set(5, 1, 5); campfire.scale.set(10, 5, 10);
+            collisionObjects.push({ pos: new THREE.Vector3(5, 0, 5), radius: 3.5 });
+            campfire.traverse(n => {
+                if(n.isMesh) {
+                    const name = n.name.toLowerCase();
+                    let targetTex = (name === 'bonfire_1') ? campfireTextures.logs : 
+                                    (name === 'bonfire_2') ? campfireTextures.stones : 
+                                    (name === 'bonfire_3') ? campfireTextures.terra : null;
+                    if(targetTex) n.material = new THREE.MeshStandardMaterial({ map: targetTex.map, normalMap: targetTex.normal, roughness: 0.9 });
+                }
+            });
+            scene.add(campfire);
+            fireLight = new THREE.PointLight(0xff6600, 35, 80, 1.2);
+            fireLight.position.set(5, 5, 5); scene.add(fireLight);
+            fireParticles = createFireParticles(); scene.add(fireParticles);
+        });
+
+        const skinTex = textureLoader.load('./media/dwarf.jpg');
+        skinTex.flipY = false; skinTex.colorSpace = THREE.SRGBColorSpace;
+
+        function fadeTo(name) {
+            const previousAction = currentAction;
+            currentAction = animations[name];
+            if (previousAction !== currentAction && currentAction) {
+                if(previousAction) previousAction.fadeOut(0.2);
+                currentAction.reset().fadeIn(0.2).play();
+            }
+        }
+
+        gltfLoader.load('./media/idle.glb', (idleGltf) => {
+			dwarf = idleGltf.scene;
+			dwarf.scale.set(0.1, 0.1, 0.1);
+			
+			// This part is the "Engine" for your character's look
+			dwarf.traverse(n => { 
+				if(n.isMesh) { 
+					// 1. Apply the texture
+					n.material = new THREE.MeshToonMaterial({ map: skinTex }); 
+					
+					// 2. Enable the shadows on the model itself
+					n.castShadow = true;  
+				} 
+			});
+
+			const charLight = new THREE.PointLight(0xffffff, 30, 20, 1.1); 
+			charLight.position.set(0, 150, 0);
+
+			charLight.castShadow = true; 
+
+			charLight.shadow.bias = -0.0001;     // Much smaller bias now that we are far away
+			charLight.shadow.normalBias = 0.02; // Prevents "self-shadowing" on the dwarf's skin
+			charLight.shadow.camera.near = 1.0; 
+			charLight.shadow.camera.far = 150;   // Vital fix for the clipping
+
+			// If you want it even softer/cleaner
+			charLight.shadow.mapSize.width = 2048; 
+			charLight.shadow.mapSize.height = 2048;
+			
+			dwarf.add(charLight); 
+			
+			
+			scene.add(dwarf);
+			
+			mixer = new THREE.AnimationMixer(dwarf);
+			animations['idle'] = mixer.clipAction(idleGltf.animations[0]);
+			currentAction = animations['idle']; 
+			currentAction.play();
+
+			// When loading the walking animation, it just grabs the animation data
+			// It doesn't need to traverse again because it's being applied to the 'dwarf' object above
+			gltfLoader.load('./media/walking.glb', (walkGltf) => { 
+				animations['walk'] = mixer.clipAction(walkGltf.animations[0]); 
+			});
+		});
+
+     window.addEventListener('mousedown', (e) => { 
+			isMouseDown = true;
+			updateMouseCoords(e);
+		});
+
+		window.addEventListener('mouseup', () => { 
+			isMouseDown = false; 
+		});
+
+		window.addEventListener('mousemove', (e) => {
+			updateMouseCoords(e);
+		});
+
+		function updateMouseCoords(event) {
+			mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
+			mouseCoords.y = -(event.clientY / window.innerHeight) * 2 + 1;
+		}
+
+        function checkCollision(newPos) {
+            for (let obj of collisionObjects) {
+                const dist = Math.sqrt(Math.pow(newPos.x - obj.pos.x, 2) + Math.pow(newPos.z - obj.pos.z, 2));
+                if (dist < obj.radius) return true;
+            }
+            return false;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.elapsedTime;
+			
+			// --- CONTINUOUS MOUSE TRACKING ---
+			if (isMouseDown) {
+				raycaster.setFromCamera(mouseCoords, camera);
+				const intersects = raycaster.intersectObject(ground);
+				if (intersects.length > 0) {
+					targetPosition.copy(intersects[0].point);
+				}
+			}
+
+            if (water) {
+                water.material.normalMap.offset.x = time * 0.05;
+                water.material.normalMap.offset.y = time * 0.05;
+            }
+
+          if (lava) lava.material.uniforms.uTime.value = time;
+            //hazePass.uniforms.uTime.value = time;
+
+			// 1. Update Grass Uniforms
+			if (grassMaterial) {
+				grassMaterial.uniforms.uTime.value = time;
+				
+				// Only update if the dwarf exists
+				if (dwarf) {
+					// We pass the dwarf's position directly to the shader
+					grassMaterial.uniforms.uPlayerPosition.value.copy(dwarf.position);
+				}
+			}
+
+            if (fireParticles) {
+                const pos = fireParticles.geometry.attributes.position.array;
+                const col = fireParticles.geometry.attributes.color.array;
+                const vels = fireParticles.userData.velocities;
+                for (let i = 0; i < vels.length; i++) {
+                    pos[i * 3 + 1] += vels[i]; 
+                    pos[i * 3] += Math.sin(time * 3 + i) * 0.05;
+                    const h = pos[i * 3 + 1];
+                    const t = THREE.MathUtils.clamp((h - 1.5) / 7.5, 0, 1); 
+                    if (t < 0.3) { col[i * 3] = 1.0; col[i * 3 + 1] = 1.0; col[i * 3 + 2] = 0.5; }
+                    else if (t < 0.7) { col[i * 3] = 1.0; col[i * 3 + 1] = 0.5; col[i * 3 + 2] = 0.0; }
+                    else { col[i * 3] = 0.6; col[i * 3 + 1] = 0.1; col[i * 3 + 2] = 0.0; }
+                    if (pos[i * 3 + 1] > 11) {
+                        pos[i * 3 + 1] = 1.5;
+                        pos[i * 3] = 5 + (Math.random() - 0.5) * 2.5;
+                        pos[i * 3 + 2] = 5 + (Math.random() - 0.5) * 2.5;
+                    }
+                }
+                fireParticles.geometry.attributes.position.needsUpdate = true;
+                fireParticles.geometry.attributes.color.needsUpdate = true;
+            }
+			
+			if (waterfallParticles) {
+				// Lock the pixel size against the camera zoom
+				waterfallParticles.material.size = 5800 * (camera.zoom / d);
+
+				const pos = waterfallParticles.geometry.attributes.position.array;
+				const vels = waterfallParticles.userData.velocities;
+
+				for (let i = 0; i < vels.length; i++) {
+					pos[i * 3 + 1] -= vels[i]; // Vertical fall
+					
+					// Reset Logic (Relative to the waterfall's position)
+					if (pos[i * 3 + 1] < -5) { 
+						pos[i * 3 + 1] = 25; 
+						pos[i * 3] = (Math.random() - 0.5) * 15;   // X Spread
+						pos[i * 3 + 2] = (Math.random() - 0.5) * 5; // Z Spread
+					}
+				}
+				waterfallParticles.geometry.attributes.position.needsUpdate = true;
+			}
+
+            if (dwarf && mixer) {
+                mixer.update(delta);
+                const distance = dwarf.position.distanceTo(targetPosition);
+                if (distance > 0.2) {
+                    const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+                    const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, moveSpeed);
+                    if (!checkCollision(nextStep)) {
+                        fadeTo('walk'); dwarf.position.copy(nextStep);
+                        dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+                    } else fadeTo('idle');
+                } else fadeTo('idle');
+                camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
+                controls.target.copy(dwarf.position);
+            }
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+		// --- INTRO SEQUENCE FOR THE ANCIENT SANDS ---
+		function runIntro() {
+			const overlay = document.getElementById('intro-overlay');
+			const container = document.querySelector('.logo-container');
+			const shine = document.querySelector('.shine');
+
+			// 1. Initial delay then fade logo in
+			setTimeout(() => {
+				container.classList.add('fade-in');
+			}, 500);
+
+			// 2. Trigger the shine effect
+			setTimeout(() => {
+				shine.classList.add('run-shine');
+			}, 2500);
+
+			// 3. Fade out the whole overlay and reveal the game
+			setTimeout(() => {
+				overlay.style.opacity = '0';
+				setTimeout(() => {
+					overlay.style.display = 'none'; // Completely hidden from clicks
+				}, 2000);
+			}, 6500);
+		}
+
+		// Trigger the intro when the logo image has loaded
+		const logoImg = document.getElementById('game-logo');
+		if (logoImg.complete) {
+			runIntro();
+		} else {
+			logoImg.onload = runIntro;
+		}
+
+        window.addEventListener('resize', () => {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -d * aspect; camera.right = d * aspect;
+            camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

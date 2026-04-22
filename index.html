@@ -124,6 +124,46 @@
         let targetPosition = new THREE.Vector3(0, 0, 0);
         const moveSpeed = 0.2;
         const collisionObjects = [];
+		
+		//Hovered Objects
+		let hoveredObject = null;
+		
+		let skeleton, skeletonMixer;
+		let skeletonAnimations = {};
+		let skeletonState = 'idle'; // 'idle', 'run', 'attack'
+		let isSkeletonDead = false;
+		let playerHP = 100, skeletonHP = 100;
+
+		// UI Elements for Health Bars
+		const playerHPBar = createHPBar('green');
+		const skeletonHPBar = createHPBar('red');
+		
+		let visualSkeletonHP = 100; 
+		const lerpSpeed = 0.1; // Higher = faster slide, Lower = slower "drain"
+		
+		function createHPBar(color) {
+			const canvas = document.createElement('canvas');
+			canvas.width = 256; canvas.height = 32;
+			const ctx = canvas.getContext('2d');
+			
+			const texture = new THREE.CanvasTexture(canvas);
+			const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }));
+			sprite.scale.set(4, 0.5, 1);
+			
+			sprite.userData = { ctx, texture, canvas };
+			scene.add(sprite);
+			return sprite;
+		}
+
+		function updateHPBar(sprite, percent, color) {
+			const { ctx, texture, canvas } = sprite.userData;
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			ctx.fillStyle = '#333';
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+			ctx.fillStyle = color;
+			ctx.fillRect(0, 0, canvas.width * (percent / 100), canvas.height);
+			texture.needsUpdate = true;
+		}
 
         const textureLoader = new THREE.TextureLoader();
         const gltfLoader = new GLTFLoader();
@@ -511,7 +551,173 @@
 			gltfLoader.load('./media/walking.glb', (walkGltf) => { 
 				animations['walk'] = mixer.clipAction(walkGltf.animations[0]); 
 			});
+			
+			// ADD THE ATTACK HERE
+			gltfLoader.load('./media/attack.glb', (attackGltf) => { 
+				const attackAction = mixer.clipAction(attackGltf.animations[0]);
+				attackAction.setLoop(THREE.LoopOnce); // Play once per click
+				attackAction.clampWhenFinished = false; // Stay on the last frame if needed
+				animations['attack'] = attackAction; 
+			});
 		});
+		
+		//skeleton
+		
+		const skeletonTex = textureLoader.load('./media/skeleton/image_0.png');
+		const skeletonNormal = textureLoader.load('./media/skeleton/image_n.png');
+
+		skeletonTex.flipY = false;
+		skeletonNormal.flipY = false;
+		skeletonTex.colorSpace = THREE.SRGBColorSpace;
+		
+		/*gltfLoader.load('./media/skeleton/idle.glb', (gltf) => {
+			skeleton = gltf.scene;
+			skeleton.scale.set(7, 7, 7);
+			skeleton.position.set(20, 1, 20); 
+
+			skeleton.traverse(n => {
+				if (n.isMesh) {
+					// Apply the new textures
+					n.material = new THREE.MeshStandardMaterial({
+						map: skeletonTex,
+						normalMap: skeletonNormal,
+						roughness: 0.8,
+						metalness: 0.2
+					});
+					
+					// Ensure the skeleton also casts shadows like the dwarf
+					n.castShadow = true;
+					n.receiveShadow = true;
+				}
+			});
+			
+			const hitboxGeom = new THREE.BoxGeometry(0.4, 1, 0.4); // Adjust size to fit skeleton
+			const hitboxMat = new THREE.MeshBasicMaterial({ visible: false }); // Invisible
+			const hitbox = new THREE.Mesh(hitboxGeom, hitboxMat);
+			hitbox.name = "Skeleton_Hitbox";
+			hitbox.position.y = 0.5; // Center it upward (BECAREFUL BECAUSE HITBOXES CAN GO UNDER THE FLOOR!!
+			skeleton.add(hitbox);
+
+			scene.add(skeleton);
+
+			// Existing animation setup...
+			skeletonMixer = new THREE.AnimationMixer(skeleton);
+			skeletonAnimations['idle'] = skeletonMixer.clipAction(gltf.animations[0]);
+			skeletonAnimations['idle'].play();
+
+			// Load additional animations
+			gltfLoader.load('./media/skeleton/run.glb', (a) => skeletonAnimations['run'] = skeletonMixer.clipAction(a.animations[0]));
+			gltfLoader.load('./media/skeleton/attack.glb', (a) => skeletonAnimations['attack'] = skeletonMixer.clipAction(a.animations[0]));
+			
+			gltfLoader.load('./media/skeleton/death.glb', (gltf) => {
+				const action = skeletonMixer.clipAction(gltf.animations[0]);
+				action.setLoop(THREE.LoopOnce);
+				action.clampWhenFinished = true; // Essential: Keeps the skeleton lying on the ground
+				skeletonAnimations['death'] = action;
+			});
+		});*/
+		
+		function fadeEnemy(enemy, name) {
+			const data = enemy.userData;
+			const newAction = data.actions[name];
+			const oldAction = data.currentAction;
+
+			// If the animation we want isn't loaded yet, just exit
+			if (!newAction) return;
+
+			// If we are already playing this animation, don't restart it
+			if (oldAction === newAction) return;
+
+			// Transition
+			if (oldAction) {
+				oldAction.fadeOut(0.2);
+			}
+
+			newAction.reset().fadeIn(0.2).play();
+			data.currentAction = newAction;
+		}
+		
+		let enemyList = []; // Array to track all active skeletons
+
+function spawnSkeleton(x, y, z) {
+    gltfLoader.load('./media/skeleton/idle.glb', (gltf) => {
+        const skeleton = gltf.scene;
+        skeleton.scale.set(7, 7, 7);
+        skeleton.position.set(x, y, z);
+
+        // Apply Textures and Shadows
+        skeleton.traverse(n => {
+            if (n.isMesh) {
+                n.material = new THREE.MeshStandardMaterial({
+                    map: skeletonTex,
+                    normalMap: skeletonNormal,
+                    roughness: 0.8,
+                    metalness: 0.2,
+					transparent: true, // Required for opacity
+                    opacity: 0         // Start invisible
+                });
+                n.castShadow = true;
+                n.receiveShadow = true;
+            }
+        });
+		
+		const hitboxGeom = new THREE.BoxGeometry(0.4, 1, 0.4); // Adjust size to fit skeleton
+		const hitboxMat = new THREE.MeshBasicMaterial({ visible: false }); // Invisible
+		const hitbox = new THREE.Mesh(hitboxGeom, hitboxMat);
+		hitbox.name = "Skeleton_Hitbox";
+		hitbox.position.y = 0.5; // Center it upward (BECAREFUL BECAUSE HITBOXES CAN GO UNDER THE FLOOR!!
+		skeleton.add(hitbox);
+
+        const skeletonMixer = new THREE.AnimationMixer(skeleton);
+        const skeletonActions = {};
+
+        // Setup the Data Object
+        skeleton.userData = {
+            currentHP: 100,
+            visualHP: 100,
+            isDead: false,
+            mixer: skeletonMixer,
+            actions: skeletonActions,
+            currentAction: null,
+            hpBar: createHPBar('red'),
+			isSpawning: true, // New flag
+            spawnProgress: 0,  // From 0 to 1
+			isAttacking: false,
+        };
+
+        // 1. Load Idle (Base)
+        skeletonActions['idle'] = skeletonMixer.clipAction(gltf.animations[0]);
+        skeletonActions['idle'].play();
+        skeleton.userData.currentAction = skeletonActions['idle'];
+
+        // 2. Load Run
+        gltfLoader.load('./media/skeleton/run.glb', (animGltf) => {
+            skeletonActions['run'] = skeletonMixer.clipAction(animGltf.animations[0]);
+        });
+
+        // 3. Load Attack
+        gltfLoader.load('./media/skeleton/attack.glb', (animGltf) => {
+            skeletonActions['attack'] = skeletonMixer.clipAction(animGltf.animations[0]);
+        });
+
+        // 4. Load Death
+        gltfLoader.load('./media/skeleton/death.glb', (animGltf) => {
+            const action = skeletonMixer.clipAction(animGltf.animations[0]);
+            action.setLoop(THREE.LoopOnce);
+            action.clampWhenFinished = true;
+            skeletonActions['death'] = action;
+        });
+
+        // Add to World
+        scene.add(skeleton);
+        scene.add(skeleton.userData.hpBar);
+        
+        // Push to the global list for the animate() loop
+        enemyList.push(skeleton);
+    });
+}
+
+
 
      window.addEventListener('mousedown', (e) => { 
 			isMouseDown = true;
@@ -527,8 +733,12 @@
 		});
 
 		function updateMouseCoords(event) {
-			mouseCoords.x = (event.clientX / window.innerWidth) * 2 - 1;
-			mouseCoords.y = -(event.clientY / window.innerHeight) * 2 + 1;
+			// Get the exact location and size of the game canvas
+			const rect = renderer.domElement.getBoundingClientRect();
+
+			// Calculate position relative to the canvas edges
+			mouseCoords.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+			mouseCoords.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 		}
 
         function checkCollision(newPos) {
@@ -538,11 +748,36 @@
             }
             return false;
         }
+		
+		// Spawn the initial "boss" skeleton
+		spawnSkeleton(20, 0, 20);
+		
+		// Spawn the initial "boss" skeleton
+		spawnSkeleton(40, 0, 40);
+		
+		let isAttacking = false;
 
         function animate() {
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
             const time = clock.elapsedTime;
+			
+			if (playerHP <= 0)
+			{
+				playerHP = 100;
+				if (dwarf)
+				{
+				dwarf.position.x = 0;
+				dwarf.position.y = 0;
+				dwarf.position.z = 0;
+				
+				// Crucial: sync the targetPosition so he doesn't "snap back" 
+				// to a previous click location once you stop hovering
+				targetPosition.copy(dwarf.position);
+				
+				hoveredObject = null;
+				}
+			}
 			
 			// --- CONTINUOUS MOUSE TRACKING ---
 			if (isMouseDown) {
@@ -551,7 +786,224 @@
 				if (intersects.length > 0) {
 					targetPosition.copy(intersects[0].point);
 				}
+				
+				if (hoveredObject && dwarf && animations['attack'] && !isAttacking) {
+				
+					isAttacking = true;
+					fadeTo('idle'); 
+					
+					// Make the dwarf face the skeleton even while standing still
+					const dx = hoveredObject.position.x - dwarf.position.x;
+					const dz = hoveredObject.position.z - dwarf.position.z;
+					dwarf.rotation.y = Math.atan2(dx, dz);
+					// Just trigger the animation. Let the animate loop handle the "Facing"
+					animations['attack'].reset().play();
+					animations['attack'].setLoop(THREE.LoopOnce);
+					
+					setTimeout(() => {
+						if (hoveredObject && hoveredObject.userData.currentHP > 0) {
+							hoveredObject.userData.currentHP -= 20; // Damage amount
+						}
+					}, 400);
+					
+					setTimeout(() => {
+												isAttacking = false;
+					}, 700);
+				}
 			}
+			
+let foundObject = false;
+			
+enemyList.forEach(enemy => {
+        const data = enemy.userData;
+        if (!data.mixer) return;
+
+        // 1. UPDATE THE MIXER (The heartbeat of the animation)
+        data.mixer.update(delta);
+		
+		//SPAWN FADE IN
+		if (data.isSpawning) {
+        data.spawnProgress += 0.01; // Adjust speed here (0.01 = ~1.6 seconds at 60fps)
+        
+        enemy.traverse(n => {
+            if (n.isMesh) {
+                n.material.opacity = data.spawnProgress;
+            }
+        });
+
+        if (data.spawnProgress >= 1) {
+            data.isSpawning = false;
+            data.hpBar.visible = true; // Show HP bar only when fully spawned
+            
+            // Optional: Disable transparency once finished to save performance
+            enemy.traverse(n => {
+                if (n.isMesh) n.material.transparent = false;
+            });
+        }
+    }
+
+        // 2. DISTANCE & SEPARATION (Prevents walking into each other)
+		const distToPlayer = enemy.position.distanceTo(dwarf.position);
+
+		if (!data.isDead) {
+			let separationVec = new THREE.Vector3(0, 0, 0);
+			const personalSpace = 4.0; 
+
+			enemyList.forEach(otherEnemy => {
+				if (enemy === otherEnemy) return; 
+				
+				const distToOther = enemy.position.distanceTo(otherEnemy.position);
+				if (!otherEnemy.isDead && distToOther < personalSpace) {
+					let diff = new THREE.Vector3().subVectors(enemy.position, otherEnemy.position);
+					diff.normalize().divideScalar(distToOther); 
+					separationVec.add(diff);
+				}
+			});
+			
+			// --- THE FIX: ZERO OUT THE VERTICAL AXIS ---
+			separationVec.y = 0;
+			
+			// Apply the push so they slide apart
+			enemy.position.addScaledVector(separationVec, 0.1);
+		}
+		
+		if (data.currentHP <= 0 && !data.isDead) {
+			
+			if (hoveredObject === enemy)
+			{
+				removeOutline(hoveredObject);
+				hoveredObject = null;
+			}
+			
+			data.isDead = true;
+			// 2. Hide the HP Bar immediately
+			data.hpBar.visible = false;
+
+			// 3. Wait for the animation to finish (e.g., 2 seconds) then fade out
+			setTimeout(() => {
+				fadeAndRemove(enemy);
+				spawnSkeleton(20, 0, 20);
+			}, 2500); 
+		}
+
+        // --- AI LOGIC & ANIMATION SWITCHING with HYSTERESIS ---
+
+// Define your thresholds
+const attackRange = 5.0;
+const chaseRange = 25.0;
+const buffer = 1.5; // The "Sticky" factor
+
+if (data.isDead) {
+    if (data.actions['death']) fadeEnemy(enemy, 'death');
+} 
+// 1. ATTACK STATE (Entry at 5, Exit at 6.5)
+else if (distToPlayer < (data.currentAction === data.actions['attack'] ? attackRange + buffer : attackRange)) {
+    if (data.actions['attack']) fadeEnemy(enemy, 'attack');
+    enemy.lookAt(dwarf.position.x, enemy.position.y, dwarf.position.z);
+	
+	if (!data.isAttacking) {
+        data.isAttacking = true;
+
+        setTimeout(() => {
+            // Check if still alive and still in range when the hit actually lands
+            const currentDist = enemy.position.distanceTo(dwarf.position);
+            if (!data.isDead && currentDist < attackRange + 1) {
+                playerHP -= 20;
+                console.log("Player Hit! HP:", playerHP);
+                // Trigger any player "hit" effects here (like red flash)
+            }
+        }, 500); // 700ms is the "impact" point of the animation
+
+        // Cooldown: Skeleton can only swing every 1.5 seconds
+        setTimeout(() => {
+            data.isAttacking = false;
+        }, 2500); 
+    }
+} 
+// 2. CHASE STATE (Entry at 25, Exit at 26.5)
+else if (distToPlayer < (data.currentAction === data.actions['run'] ? chaseRange + buffer : chaseRange)) {
+    if (data.actions['run']) {
+        fadeEnemy(enemy, 'run');
+        const dir = new THREE.Vector3().subVectors(dwarf.position, enemy.position).normalize();
+		dir.y = 0;
+        enemy.position.addScaledVector(dir, 0.12); 
+    }
+    enemy.lookAt(dwarf.position.x, enemy.position.y, dwarf.position.z);
+} 
+// 3. IDLE STATE
+else {
+    fadeEnemy(enemy, 'idle');
+}
+		
+		//if (enemy.currentHP < 0) enemy.currentHP = 0;	
+
+        // 4. HP BAR POSITIONING
+        if (data.hpBar) {
+            data.hpBar.position.set(enemy.position.x, enemy.position.y + 8, enemy.position.z);
+			
+			if (Math.abs(data.visualHP - data.currentHP) > 0.1) {
+			data.visualHP += (data.currentHP - data.visualHP) * lerpSpeed;
+			}
+			
+			updateHPBar(data.hpBar, data.visualHP, 'red');
+        }
+		
+		//HOVERING ENEMIES
+		
+		raycaster.setFromCamera(mouseCoords, camera);
+				
+		// Check for the hitbox specifically
+		const hitbox = enemy.getObjectByName("Skeleton_Hitbox");
+		const intersects = raycaster.intersectObject(hitbox); // No need for 'true' here
+
+		if (!data.isDead && intersects.length > 0) {
+		
+			if (hoveredObject !== null && hoveredObject !== enemy)
+			{
+			removeOutline(hoveredObject);
+			hoveredObject = null;
+			}
+		
+			foundObject = true;
+			hoveredObject = enemy;
+			addOutline(enemy, 2);
+			console.log("--- SKELETON TARGETED ---");
+		} 
+    });
+	
+	//dont keep releasing the lock when mouse held
+	if (!foundObject && !isMouseDown)
+	{
+			if (hoveredObject !== null) {
+				removeOutline(hoveredObject);
+				hoveredObject = null;
+				console.log("--- TARGET LOST ---");
+			}
+	}
+			
+			//Hovering Objects
+			
+			/*if (skeleton) {
+				raycaster.setFromCamera(mouseCoords, camera);
+				
+				// Check for the hitbox specifically
+				const hitbox = skeleton.getObjectByName("Skeleton_Hitbox");
+				const intersects = raycaster.intersectObject(hitbox); // No need for 'true' here
+
+				if (intersects.length > 0) {
+					if (hoveredObject === null) {
+						hoveredObject = skeleton;
+						addOutline(skeleton, 2);
+						console.log("--- SKELETON TARGETED ---");
+					}
+				} else {
+					if (hoveredObject !== null) {
+						removeOutline(hoveredObject);
+						hoveredObject = null;
+						console.log("--- TARGET LOST ---");
+					}
+				}
+			}*/
 
             if (water) {
                 water.material.normalMap.offset.x = time * 0.05;
@@ -617,21 +1069,189 @@
             if (dwarf && mixer) {
                 mixer.update(delta);
                 const distance = dwarf.position.distanceTo(targetPosition);
-                if (distance > 0.2) {
-                    const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
-                    const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, moveSpeed);
-                    if (!checkCollision(nextStep)) {
-                        fadeTo('walk'); dwarf.position.copy(nextStep);
-                        dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
-                    } else fadeTo('idle');
-                } else fadeTo('idle');
-                camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
-                controls.target.copy(dwarf.position);
+                // 1. ADD THIS CHECK: If hovering an enemy, stop moving!
+			if (hoveredObject) {
+			
+			// Stop walking and go to idle
+				fadeTo('idle'); 
+				
+				// Face the skeleton (Pixel-perfect rotation)
+				const lookTarget = new THREE.Vector3(
+					hoveredObject.position.x, 
+					dwarf.position.y, // Keeps the dwarf from tilting up/down
+					hoveredObject.position.z
+				);
+				dwarf.lookAt(lookTarget);
+
+				// Crucial: sync the targetPosition so he doesn't "snap back" 
+				// to a previous click location once you stop hovering
+				targetPosition.copy(dwarf.position);
+				
+			} else if (distance > 0.2) {
+				// 2. Normal movement logic only runs if NOT hovering
+				const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+				const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, moveSpeed);
+				
+				if (!checkCollision(nextStep)) {
+					fadeTo('walk'); 
+					dwarf.position.copy(nextStep);
+					dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+				} else {
+					fadeTo('idle');
+				}
+			} else {
+				fadeTo('idle');
+			}
+			
+			playerHPBar.position.set(dwarf.position.x, dwarf.position.y + 8, dwarf.position.z);
+					
+			updateHPBar(playerHPBar, playerHP, 'green');
+
+			// Camera and controls follow as usual
+			camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
+			controls.target.copy(dwarf.position);
             }
+			
+			
+			//skeleton animation
+				if (skeleton && skeletonMixer) {
+					skeletonMixer.update(delta);
+					const distToPlayer = skeleton.position.distanceTo(dwarf.position);
+
+					// --- ENEMY AI LOGIC ---
+					if (isSkeletonDead)
+					{
+						if (skeletonState !== 'death') {
+							
+							fadeSkeletonTo('death');
+							skeletonState = 'death';
+							}
+					}
+					else if (distToPlayer < 5) {
+						// ATTACK
+						if (skeletonState !== 'attack') {
+							fadeSkeletonTo('attack');
+							skeletonState = 'attack';
+						}
+					} else if (distToPlayer < 25) {
+						// CHASE
+						skeletonState = 'run';
+						fadeSkeletonTo('run');
+						const dir = new THREE.Vector3().subVectors(dwarf.position, skeleton.position).normalize();
+						skeleton.position.addScaledVector(dir, 0.12); // Slightly slower than player
+						skeleton.lookAt(dwarf.position.x, skeleton.position.y, dwarf.position.z);
+					} else {
+						// IDLE
+						fadeSkeletonTo('idle');
+						skeletonState = 'idle';
+					}
+
+					// --- UPDATE HP BAR POSITIONS ---
+					skeletonHPBar.position.set(skeleton.position.x, skeleton.position.y + 8, skeleton.position.z);
+					playerHPBar.position.set(dwarf.position.x, dwarf.position.y + 8, dwarf.position.z);
+					
+					if (Math.abs(visualSkeletonHP - skeletonHP) > 0.1) {
+						// Move visual HP 10% of the way toward actual HP every frame
+						visualSkeletonHP += (skeletonHP - visualSkeletonHP) * lerpSpeed;
+						
+						// 3. Redraw the bar with the moving value
+						//updateHPBar(skeletonHPBar, visualSkeletonHP, 'red');
+					}
+					
+					updateHPBar(skeletonHPBar, visualSkeletonHP, 'red');
+					updateHPBar(playerHPBar, playerHP, 'green');
+				}
+
+			
+			
             controls.update();
             renderer.render(scene, camera);
         }
         animate();
+		
+		function fadeAndRemove(object) {
+			const duration = 2000; // 2 seconds to fade
+			const startTime = Date.now();
+
+			function fade() {
+				const elapsed = Date.now() - startTime;
+				const progress = elapsed / duration;
+
+				if (progress < 1) {
+					// Sink the skeleton into the floor slightly for a "dissolve" effect
+					object.position.y -= 0.01;
+					
+					// Fade the opacity of all meshes in the skeleton
+					object.traverse(n => {
+						if (n.isMesh) {
+							n.material.transparent = true;
+							n.material.opacity = 1 - progress;
+						}
+					});
+					requestAnimationFrame(fade);
+				} else {
+					// Final cleanup
+					scene.remove(object);
+					console.log("Skeleton removed from scene.");
+				}
+			}
+			fade();
+		}
+		
+		
+function addOutline(object, thickness = 1.0) {
+    object.traverse(n => {
+        if (n.isMesh && n.name !== "Skeleton_Hitbox") {
+            if (!n.material.userData.shader) {
+                n.material.onBeforeCompile = (shader) => {
+                    shader.uniforms.uOutlineColor = { value: new THREE.Color(0xff0000) };
+                    shader.uniforms.uHoverActive = { value: 1.0 };
+                    shader.uniforms.uThickness = { value: thickness }; // New uniform
+
+                    shader.fragmentShader = `
+                        uniform vec3 uOutlineColor;
+                        uniform float uHoverActive;
+                        uniform float uThickness;
+                    ` + shader.fragmentShader;
+
+                    shader.fragmentShader = shader.fragmentShader.replace(
+                        `#include <dithering_fragment>`,
+                        `#include <dithering_fragment>
+                        if (uHoverActive > 0.5) {
+                            // Using uThickness here to control the spread
+                            float intensity = pow(1.0 - dot(normalize(vNormal), normalize(vViewPosition)), uThickness) * 1.5;
+                            intensity = smoothstep(0.1, 0.9, intensity); 
+                            gl_FragColor.rgb = mix(gl_FragColor.rgb, uOutlineColor, intensity);
+                        }
+                        `
+                    );
+                    n.material.userData.shader = shader;
+                };
+                n.material.needsUpdate = true;
+            } else {
+                // If shader already exists, just update the values
+                n.material.userData.shader.uniforms.uHoverActive.value = 1.0;
+                n.material.userData.shader.uniforms.uThickness.value = thickness;
+            }
+        }
+    });
+}
+
+function removeOutline(object) {
+    object.traverse(n => {
+        if (n.isMesh && n.material.userData.shader) {
+            n.material.userData.shader.uniforms.uHoverActive.value = 0.0;
+        }
+    });
+}
+		
+		function fadeSkeletonTo(name) {
+				const action = skeletonAnimations[name];
+				if (action && !action.isRunning()) {
+					Object.values(skeletonAnimations).forEach(a => a.fadeOut(0.2));
+					action.reset().fadeIn(0.2).play();
+				}
+			}
 
 		// --- INTRO SEQUENCE FOR THE ANCIENT SANDS ---
 		function runIntro() {

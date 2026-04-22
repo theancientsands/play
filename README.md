@@ -19,7 +19,7 @@ The vision for The Ancient Sands is to provide a deep, systems-driven ARPG exper
 
 ## Getting Started
 To view the live technical demo, visit: 
-[[https://elevationsrpg.github.io/theancientsands/](https://theancientsands.github.io/play/)]([https://elevationsrpg.github.io/theancientsands/](https://theancientsands.github.io/play/))
+[https://theancientsands.github.io/play/](https://theancientsands.github.io/play/)
 
 ## Attribution & Legal
 * **Developed By:** Elevations (WootDragon)

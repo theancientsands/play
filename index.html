@@ -817,6 +817,7 @@ let foundObject = false;
 enemyList.forEach(enemy => {
         const data = enemy.userData;
         if (!data.mixer) return;
+		if (!dwarf) return;
 
         // 1. UPDATE THE MIXER (The heartbeat of the animation)
         data.mixer.update(delta);

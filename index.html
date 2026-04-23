@@ -101,7 +101,10 @@
         const aspect = window.innerWidth / window.innerHeight;
         const d = 10; 
         const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 0.1, 2000);
-        camera.position.set(100, 100, 100); 
+        
+		camera.zoom = 0.6; // Higher = zoomed in more, Lower (e.g. 0.5) = zoomed out further
+		
+		camera.position.set(100, 100, 100); 
         camera.lookAt(0, 0, 0);
         const cameraOffset = new THREE.Vector3().copy(camera.position);
 
@@ -122,7 +125,7 @@
 		let isMouseDown = false;
 		const mouseCoords = new THREE.Vector2(); // To store the "static" mouse position
         let targetPosition = new THREE.Vector3(0, 0, 0);
-        const moveSpeed = 0.2;
+        const moveSpeed = 15.0;
         const collisionObjects = [];
 		
 		//Hovered Objects
@@ -169,11 +172,22 @@
         const gltfLoader = new GLTFLoader();
 
         const groundTex = textureLoader.load('./media/42.bmp');
+		
+		const groundNormal = textureLoader.load('./media/42_n.png'); // Replace with your actual normal map file
+		
         groundTex.colorSpace = THREE.SRGBColorSpace; 
-        const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(300, 300),
-            new THREE.MeshLambertMaterial({ map: groundTex })
-        );
+		
+        // 1. Switch to Standard Material
+		const groundMat = new THREE.MeshStandardMaterial({ 
+			map: groundTex,
+			normalMap: groundNormal 
+		});
+
+		// 2. Increase the strength (Default is 1, 1)
+		// Try (2, 2) for a stronger look, or even higher for deep ridges
+		groundMat.normalScale.set(2.5, 2.5); 
+
+		const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), groundMat);
         ground.rotation.x = -Math.PI / 2;
 		ground.receiveShadow = true; // <--- ADD THIS
         scene.add(ground);
@@ -1068,50 +1082,46 @@ else {
 			}
 
             if (dwarf && mixer) {
-                mixer.update(delta);
-                const distance = dwarf.position.distanceTo(targetPosition);
-                // 1. ADD THIS CHECK: If hovering an enemy, stop moving!
-			if (hoveredObject) {
-			
-			// Stop walking and go to idle
-				fadeTo('idle'); 
-				
-				// Face the skeleton (Pixel-perfect rotation)
-				const lookTarget = new THREE.Vector3(
-					hoveredObject.position.x, 
-					dwarf.position.y, // Keeps the dwarf from tilting up/down
-					hoveredObject.position.z
-				);
-				dwarf.lookAt(lookTarget);
+    mixer.update(delta);
+    const distance = dwarf.position.distanceTo(targetPosition);
 
-				// Crucial: sync the targetPosition so he doesn't "snap back" 
-				// to a previous click location once you stop hovering
-				targetPosition.copy(dwarf.position);
-				
-			} else if (distance > 0.2) {
-				// 2. Normal movement logic only runs if NOT hovering
-				const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
-				const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, moveSpeed);
-				
-				if (!checkCollision(nextStep)) {
-					fadeTo('walk'); 
-					dwarf.position.copy(nextStep);
-					dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
-				} else {
-					fadeTo('idle');
-				}
-			} else {
-				fadeTo('idle');
-			}
-			
-			playerHPBar.position.set(dwarf.position.x, dwarf.position.y + 8, dwarf.position.z);
-					
-			updateHPBar(playerHPBar, playerHP, 'green');
+    if (hoveredObject) {
+        fadeTo('idle'); 
+        
+        const lookTarget = new THREE.Vector3(
+            hoveredObject.position.x, 
+            dwarf.position.y, 
+            hoveredObject.position.z
+        );
+        dwarf.lookAt(lookTarget);
+        targetPosition.copy(dwarf.position);
+        
+    } else if (distance > 1.0) {
+        const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+        
+        // --- THE FIX: Multiply moveSpeed by delta ---
+        // This ensures the distance moved is consistent regardless of FPS
+        const actualMoveSpeed = moveSpeed * delta; 
+        const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
+        
+        if (!checkCollision(nextStep)) {
+            fadeTo('walk'); 
+            dwarf.position.copy(nextStep);
+            dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+        } else {
+            fadeTo('idle');
+        }
+    } else {
+        fadeTo('idle');
+    }
+    
+    // UI and Camera following
+    playerHPBar.position.set(dwarf.position.x, dwarf.position.y + 8, dwarf.position.z);
+    updateHPBar(playerHPBar, playerHP, 'green');
 
-			// Camera and controls follow as usual
-			camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
-			controls.target.copy(dwarf.position);
-            }
+    camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
+    controls.target.copy(dwarf.position);
+}
 			
 			
 			//skeleton animation

@@ -127,6 +127,7 @@
         let targetPosition = new THREE.Vector3(0, 0, 0);
         const moveSpeed = 15.0;
         const collisionObjects = [];
+		let introdone = false;
 		
 		//Hovered Objects
 		let hoveredObject = null;
@@ -770,8 +771,10 @@ function spawnSkeleton(x, y, z) {
 		spawnSkeleton(40, 0, 40);
 		
 		let isAttacking = false;
+		let enemyTracked = false;
 
         function animate() {
+		
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
             const time = clock.elapsedTime;
@@ -781,15 +784,23 @@ function spawnSkeleton(x, y, z) {
 				playerHP = 100;
 				if (dwarf)
 				{
-				dwarf.position.x = 0;
-				dwarf.position.y = 0;
-				dwarf.position.z = 0;
-				
-				// Crucial: sync the targetPosition so he doesn't "snap back" 
-				// to a previous click location once you stop hovering
-				targetPosition.copy(dwarf.position);
-				
-				hoveredObject = null;
+					dwarf.position.x = -20;
+					dwarf.position.y = 0;
+					dwarf.position.z = 0;
+					
+					// Crucial: sync the targetPosition so he doesn't "snap back" 
+					// to a previous click location once you stop hovering
+					targetPosition.copy(dwarf.position);
+					
+					isMouseDown = false;
+					
+					enemyTracked = false;
+					
+					if (hoveredObject)
+					{
+					removeOutline(hoveredObject);
+					hoveredObject = null;
+					}
 				}
 			}
 			
@@ -803,6 +814,17 @@ function spawnSkeleton(x, y, z) {
 				
 				if (hoveredObject && dwarf && animations['attack'] && !isAttacking) {
 				
+					const distToEnemy = dwarf.position.distanceTo(hoveredObject.position);
+					
+					const attackRange = 5.0; // The distance needed to START the attack
+					const exitBuffer = 2.0;  // How much further they can move before the attack "breaks"
+
+					// Calculate the "Active Range": 
+					// If we are already attacking, the range is effectively 7.0 (5 + 2).
+					// If we are just walking up, the range is 5.0.
+					const dynamicRange = isAttacking ? (attackRange + exitBuffer) : attackRange;
+
+					if (distToEnemy < dynamicRange) {
 					isAttacking = true;
 					fadeTo('idle'); 
 					
@@ -823,6 +845,12 @@ function spawnSkeleton(x, y, z) {
 					setTimeout(() => {
 												isAttacking = false;
 					}, 700);
+					}
+					else
+					{
+						targetPosition.copy(hoveredObject.position);
+						enemyTracked = true;
+					}
 				}
 			}
 			
@@ -832,6 +860,7 @@ enemyList.forEach(enemy => {
         const data = enemy.userData;
         if (!data.mixer) return;
 		if (!dwarf) return;
+		if (!introdone) return;
 
         // 1. UPDATE THE MIXER (The heartbeat of the animation)
         data.mixer.update(delta);
@@ -987,7 +1016,7 @@ else {
     });
 	
 	//dont keep releasing the lock when mouse held
-	if (!foundObject && !isMouseDown)
+	if (!foundObject && !isMouseDown && !enemyTracked)
 	{
 			if (hoveredObject !== null) {
 				removeOutline(hoveredObject);
@@ -1086,6 +1115,39 @@ else {
     const distance = dwarf.position.distanceTo(targetPosition);
 
     if (hoveredObject) {
+	
+		const distance = dwarf.position.distanceTo(hoveredObject.position);
+		
+		const attackRange = 5.0; // The distance needed to START the attack
+		const exitBuffer = 2.0;  // How much further they can move before the attack "breaks"
+
+		// Calculate the "Active Range": 
+		// If we are already attacking, the range is effectively 7.0 (5 + 2).
+		// If we are just walking up, the range is 5.0.
+		const dynamicRange = isAttacking ? (attackRange + exitBuffer) : attackRange;
+
+		if (enemyTracked && distance > dynamicRange) {
+		
+			//keep updating the hovered object position
+			targetPosition.copy(hoveredObject.position);
+		
+			const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+			
+			// --- THE FIX: Multiply moveSpeed by delta ---
+			// This ensures the distance moved is consistent regardless of FPS
+			const actualMoveSpeed = moveSpeed * delta; 
+			const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
+			
+			if (!checkCollision(nextStep)) {
+				fadeTo('walk'); 
+				dwarf.position.copy(nextStep);
+				dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+			} else {
+				fadeTo('idle');
+			}
+		}
+		else
+		{
         fadeTo('idle'); 
         
         const lookTarget = new THREE.Vector3(
@@ -1095,7 +1157,9 @@ else {
         );
         dwarf.lookAt(lookTarget);
         targetPosition.copy(dwarf.position);
-        
+		enemyTracked = false;
+        }
+		
     } else if (distance > 1.0) {
         const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
         
@@ -1178,6 +1242,7 @@ else {
             controls.update();
             renderer.render(scene, camera);
         }
+		
         animate();
 		
 		function fadeAndRemove(object) {
@@ -1285,6 +1350,7 @@ function removeOutline(object) {
 				overlay.style.opacity = '0';
 				setTimeout(() => {
 					overlay.style.display = 'none'; // Completely hidden from clicks
+					introdone = true;
 				}, 2000);
 			}, 6500);
 		}

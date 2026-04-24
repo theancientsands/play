@@ -61,6 +61,7 @@
 			100% { left: 150%; }
 		}
     </style>
+	<script src="https://mrdoob.github.io/stats.js/build/stats.min.js"></script>
 </head>
 <body>
 <div id="intro-overlay">
@@ -79,6 +80,18 @@
     </script>
 
     <script type="module">
+	
+		const stats = new Stats();
+		stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+		document.body.appendChild(stats.dom);
+
+		// --- MAKE IT BIGGER ---
+		stats.dom.style.position = 'absolute';
+		stats.dom.style.top = '10px';
+		stats.dom.style.left = '10px';
+		stats.dom.style.transform = 'scale(2.0)'; // Double the size
+		stats.dom.style.transformOrigin = 'top left'; // Keep it pinned to the corner
+	
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -88,9 +101,16 @@
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+       let renderer = new THREE.WebGLRenderer({ 
+			antialias: true, 
+			powerPreference: "high-performance"
+		});
+       // Instead of window.innerWidth, cap the resolution for better performance
+		const width = window.innerWidth;
+		const height = window.innerHeight;
+		const pixelRatio = window.devicePixelRatio; // Cap at 1.5 even on 4K screens
+		renderer.setPixelRatio(pixelRatio);
+		renderer.setSize(width, height);
         renderer.outputColorSpace = THREE.SRGBColorSpace; 
 		
 		renderer.shadowMap.enabled = true;
@@ -186,7 +206,7 @@
 
 		// 2. Increase the strength (Default is 1, 1)
 		// Try (2, 2) for a stronger look, or even higher for deep ridges
-		groundMat.normalScale.set(2.5, 2.5); 
+		groundMat.normalScale.set(3, 3); 
 
 		const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), groundMat);
         ground.rotation.x = -Math.PI / 2;
@@ -228,6 +248,11 @@
         water = new THREE.Mesh(new THREE.CircleGeometry(15, 64), waterMat);
         water.rotation.x = -Math.PI / 2;
         water.position.set(5, 1.2, 5); 
+		water.castShadow = false;
+		water.receiveShadow = false;
+		water.frustumCulled = false;
+		water.matrixAutoUpdate = false;
+		water.updateMatrix(); // Calculate it once, then never again
         scene.add(water);
 
         // --- SHADER LAVA (KEPT IN) ---
@@ -277,7 +302,12 @@
 
         lava = new THREE.Mesh(new THREE.PlaneGeometry(30, 30, 64, 64), lavaMat);
         lava.rotation.x = -Math.PI / 2;
-        lava.position.set(-40, 1.0, -40); 
+        lava.position.set(-40, 1.0, -40);
+		lava.castShadow = false;
+		lava.receiveShadow = false;
+		lava.frustumCulled = false;
+		lava.matrixAutoUpdate = false;
+		lava.updateMatrix(); // Calculate it once, then never again
         scene.add(lava);
 
         lavaLight = new THREE.PointLight(0xff3300, 30, 100, 1.2);
@@ -286,52 +316,103 @@
 		
 		//WATERFALL PARTICLES
 		
-		function createWaterfall() {
-			const count = 40; // Fewer, larger blobs for a "cloudy" waterfall
-			const geometry = new THREE.BufferGeometry();
-			const positions = new Float32Array(count * 3);
-			const velocities = new Float32Array(count);
+function createWaterfall() {
+    const count = 40; 
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const velocities = new Float32Array(count);
+    const offsets = new Float32Array(count * 3); 
 
-			for (let i = 0; i < count; i++) {
-				// Centered at 0, 0, 0 locally
-				positions[i * 3] = (Math.random() - 0.5) * 15; 
-				positions[i * 3 + 1] = Math.random() * 30; 
-				positions[i * 3 + 2] = (Math.random() - 0.5) * 5;
-				velocities[i] = 0.15 + Math.random() * 0.25;
-			}
+    for (let i = 0; i < count; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 15; 
+        positions[i * 3 + 1] = Math.random() * 30; 
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 5;
+        velocities[i] = 0.15 + Math.random() * 0.25;
 
-			geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        offsets[i * 3] = Math.random() - 0.5; 
+        offsets[i * 3 + 1] = Math.random();     
+        offsets[i * 3 + 2] = Math.random() - 0.5; 
+    }
 
-			const canvas = document.createElement('canvas');
-			canvas.width = 128; canvas.height = 128;
-			const ctx = canvas.getContext('2d');
-			const grad = ctx.createRadialGradient(64, 64, 5, 64, 64, 64);
-			grad.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
-			grad.addColorStop(0.2, 'rgba(180, 220, 255, 0.6)');
-			grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-			ctx.fillStyle = grad;
-			ctx.fillRect(0, 0, 128, 128);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities, 1));
+    geometry.setAttribute('aOffset', new THREE.BufferAttribute(offsets, 3));
 
-			const material = new THREE.PointsMaterial({
-				size: 800, // This is our "Master Size"
-				map: new THREE.CanvasTexture(canvas),
-				transparent: true,
-				opacity: 0.3,
-				blending: THREE.AdditiveBlending,
-				depthWrite: false,
-				sizeAttenuation: false 
-			});
+    const waterfallMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uZoom: { value: 1.0 },
+            // INCREASED THIS: Start with a much higher base
+            uMasterSize: { value: 600.0 } 
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        vertexShader: `
+            uniform float uTime;
+            uniform float uZoom;
+            uniform float uMasterSize;
+            attribute float aVelocity;
+            attribute vec3 aOffset;
 
-			const points = new THREE.Points(geometry, material);
-			points.userData = { velocities };
-			points.frustumCulled = false; 
-			
-			return points;
-		}
+            void main() {
+                vec3 pos = position;
+
+                float fallSpan = 30.0;
+                float totalFall = uTime * aVelocity * 60.0;
+                
+                pos.y = 25.0 - mod( (25.0 - pos.y) + totalFall, fallSpan);
+
+                // Use the floor of the fall to keep the X/Z reset stable per drop
+                float loopID = floor(((25.0 - position.y) + totalFall) / fallSpan);
+                
+                // Deterministic "random" spread based on the initial offset
+                pos.x = aOffset.x * 15.0; 
+                pos.z = aOffset.z * 5.0;
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                
+                // --- SIZE FIX ---
+                // We multiply the master size by the camera zoom.
+                // If they are still too small, increase uMasterSize in the uniforms above.
+                gl_PointSize = uMasterSize * uZoom; 
+                
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            void main() {
+                vec2 uv = gl_PointCoord - 0.5;
+                float dist = length(uv);
+                if (dist > 0.5) discard;
+
+                // Soft "Cloudy" Bloom Effect
+                vec3 white = vec3(1.0, 1.0, 1.0);
+                vec3 blue = vec3(0.5, 0.8, 1.0);
+                
+                // Create a soft falloff
+                float alpha = (0.5 - dist) * 2.0; 
+                alpha = pow(alpha, 1.5) * 0.3; // Replicating your 0.3 opacity
+
+                gl_FragColor = vec4(mix(blue, white, alpha), alpha);
+            }
+        `
+    });
+
+    const points = new THREE.Points(geometry, waterfallMaterial);
+    points.frustumCulled = false;
+    return points;
+}
 
 		// Add to scene
 		waterfallParticles = createWaterfall();
 		waterfallParticles.position.set(10, 0, -8);
+		waterfallParticles.castShadow = false;
+		waterfallParticles.receiveShadow = false;
+		waterfallParticles.frustumCulled = false;
+		waterfallParticles.matrixAutoUpdate = false;
+		waterfallParticles.updateMatrix(); // Calculate it once, then never again
+		
 		scene.add(waterfallParticles);
 		
 		// 1. THE VERTEX SHADER (The "Math" that stops the stretching)
@@ -403,6 +484,10 @@
 			},
 			side: THREE.DoubleSide
 		});
+		
+		grassMaterial.transparent = false; // Turn off expensive blending
+		grassMaterial.alphaTest = 0.5;      // Pixels are either 100% visible or 0% (discarded)
+		grassMaterial.depthWrite = true;   // Allows the GPU to use the depth buffer
 
 		// 4. THE GENERATOR (Ensures the root is actually at 0,0,0)
 		function createGrassField(totalBlades, fieldSize, clusterCount) {
@@ -443,6 +528,11 @@
 
 		// totalBlades, fieldSize, clusterCount
 		const grassField = createGrassField(8000, 150, 40); 
+		grassField.castShadow = false;
+		grassField.receiveShadow = false;
+		grassField.matrixAutoUpdate = false;
+		grassField.frustumCulled = false;
+		grassField.updateMatrix(); // Calculate it once, then never again
 		scene.add(grassField);
 
         const cpBase = './media/campfire/';
@@ -457,39 +547,91 @@
             t.map.flipY = false; t.normal.flipY = false;
         });
 
-        function createFireParticles() {
-            const count = 550;
-            const geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(count * 3);
-            const velocities = new Float32Array(count);
-            const colors = new Float32Array(count * 3); 
-            for (let i = 0; i < count; i++) {
-                positions[i * 3] = 5 + (Math.random() - 0.5) * 2.5; 
-                positions[i * 3 + 1] = 1 + Math.random() * 8; 
-                positions[i * 3 + 2] = 5 + (Math.random() - 0.5) * 2.5;
-                velocities[i] = 0.05 + Math.random() * 0.08;
-                colors[i * 3] = 1.0; colors[i * 3 + 1] = 1.0; colors[i * 3 + 2] = 0.5;
+function createFireParticles() {
+    const count = 550;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const velocities = new Float32Array(count);
+    const offsets = new Float32Array(count); 
+
+    for (let i = 0; i < count; i++) {
+        // MATCHING ORIGINAL POSITIONS
+        positions[i * 3] = 5 + (Math.random() - 0.5) * 2.5; 
+        positions[i * 3 + 1] = 1 + Math.random() * 8; 
+        positions[i * 3 + 2] = 5 + (Math.random() - 0.5) * 2.5;
+
+        // MATCHING ORIGINAL VELOCITY
+        velocities[i] = 0.05 + Math.random() * 0.08;
+        offsets[i] = i; 
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities, 1));
+    geometry.setAttribute('aOffset', new THREE.BufferAttribute(offsets, 1));
+
+    const fireShaderMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uSize: { value: 30.0 }, // Your original size
+            uZoom: { value: 1.0 }   // Feed camera.zoom into here
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        vertexShader: `
+            uniform float uTime;
+            uniform float uSize;
+            uniform float uZoom;
+            attribute float aVelocity;
+            attribute float aOffset;
+            varying float vHeightFactor;
+
+            void main() {
+                vec3 pos = position;
+
+                // Move upward and loop (Simulating 60fps movement)
+                float totalMove = uTime * aVelocity * 60.0; 
+                pos.y = 1.5 + mod(pos.y - 1.5 + totalMove, 9.5);
+
+                // Side-to-side jitter
+                pos.x += sin(uTime * 3.0 + aOffset) * 0.05;
+
+                vHeightFactor = clamp((pos.y - 1.5) / 7.5, 0.0, 1.0);
+
+                // --- THE CRITICAL FIX ---
+                // We multiply size by zoom to match the Orthographic Camera's scaling
+                gl_PointSize = uSize * uZoom; 
+                
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
             }
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            const canvas = document.createElement('canvas');
-            canvas.width = 128; canvas.height = 128;
-            const ctx = canvas.getContext('2d');
-            ctx.beginPath(); ctx.moveTo(64, 0);
-            ctx.quadraticCurveTo(80, 40, 100, 100); ctx.quadraticCurveTo(64, 128, 28, 100);
-            ctx.quadraticCurveTo(48, 40, 64, 0); ctx.closePath();
-            const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-            grad.addColorStop(0.1, 'rgba(255,255,255,1)'); grad.addColorStop(0.3, 'rgba(255,200,0,0.8)');
-            grad.addColorStop(0.6, 'rgba(255,50,0,0.4)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = grad; ctx.fill();
-            const material = new THREE.PointsMaterial({
-                size: 15.0, map: new THREE.CanvasTexture(canvas), transparent: true,
-                blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true
-            });
-            const points = new THREE.Points(geometry, material);
-            points.userData = { velocities };
-            return points;
-        }
+        `,
+        fragmentShader: `
+            varying float vHeightFactor;
+            
+            void main() {
+                // Math-based teardrop shape (replaces your canvas drawing)
+                vec2 uv = gl_PointCoord - 0.5;
+                float dist = length(vec2(uv.x * 1.5, uv.y + uv.x * uv.x * 2.0));
+                if (dist > 0.5) discard;
+
+                // Original Color Transitions
+                vec3 color;
+                if (vHeightFactor < 0.3) {
+                    color = vec3(1.0, 1.0, 0.5); 
+                } else if (vHeightFactor < 0.7) {
+                    color = vec3(1.0, 0.5, 0.0); 
+                } else {
+                    color = vec3(0.6, 0.1, 0.0); 
+                }
+
+                float alpha = smoothstep(0.5, 0.2, dist);
+                gl_FragColor = vec4(color, alpha * (1.0 - vHeightFactor));
+            }
+        `
+    });
+
+    return new THREE.Points(geometry, fireShaderMaterial);
+}
 
         gltfLoader.load('./media/campfire.glb', (gltf) => {
             const campfire = gltf.scene;
@@ -507,7 +649,14 @@
             scene.add(campfire);
             fireLight = new THREE.PointLight(0xff6600, 35, 80, 1.2);
             fireLight.position.set(5, 5, 5); scene.add(fireLight);
-            fireParticles = createFireParticles(); scene.add(fireParticles);
+            fireParticles = createFireParticles(); 
+			fireParticles.castShadow = false;
+			fireParticles.receiveShadow = false;
+			fireParticles.frustumCulled = false;
+			fireParticles.matrixAutoUpdate = false;
+			fireParticles.updateMatrix(); // Calculate it once, then never again
+		
+			scene.add(fireParticles);
         });
 
         const skinTex = textureLoader.load('./media/dwarf.jpg');
@@ -548,8 +697,8 @@
 			charLight.shadow.camera.far = 150;   // Vital fix for the clipping
 
 			// If you want it even softer/cleaner
-			charLight.shadow.mapSize.width = 2048; 
-			charLight.shadow.mapSize.height = 2048;
+			charLight.shadow.mapSize.width = 256; 
+			charLight.shadow.mapSize.height = 256;
 			
 			dwarf.add(charLight); 
 			
@@ -672,7 +821,7 @@ function spawnSkeleton(x, y, z) {
                     opacity: 0         // Start invisible
                 });
                 n.castShadow = true;
-                n.receiveShadow = true;
+               // n.receiveShadow = true;
             }
         });
 		
@@ -685,6 +834,12 @@ function spawnSkeleton(x, y, z) {
 
         const skeletonMixer = new THREE.AnimationMixer(skeleton);
         const skeletonActions = {};
+		
+		let separationVec = new THREE.Vector3(0, 0, 0);
+		let diff = new THREE.Vector3(0, 0, 0);
+		let dir = new THREE.Vector3(0, 0, 0);
+		
+					
 
         // Setup the Data Object
         skeleton.userData = {
@@ -698,6 +853,10 @@ function spawnSkeleton(x, y, z) {
 			isSpawning: true, // New flag
             spawnProgress: 0,  // From 0 to 1
 			isAttacking: false,
+			cachedHitBox: hitbox,
+			separationVec: separationVec,
+			diff: diff,
+			dir: dir
         };
 
         // 1. Load Idle (Base)
@@ -722,6 +881,9 @@ function spawnSkeleton(x, y, z) {
             action.clampWhenFinished = true;
             skeletonActions['death'] = action;
         });
+		
+		//Turn off frustrum
+		skeleton.frustumCulled = false;
 
         // Add to World
         scene.add(skeleton);
@@ -736,7 +898,7 @@ function spawnSkeleton(x, y, z) {
 
      window.addEventListener('mousedown', (e) => { 
 			isMouseDown = true;
-			updateMouseCoords(e);
+			//updateMouseCoords(e);
 		});
 
 		window.addEventListener('mouseup', () => { 
@@ -757,12 +919,25 @@ function spawnSkeleton(x, y, z) {
 		}
 
         function checkCollision(newPos) {
-            for (let obj of collisionObjects) {
-                const dist = Math.sqrt(Math.pow(newPos.x - obj.pos.x, 2) + Math.pow(newPos.z - obj.pos.z, 2));
-                if (dist < obj.radius) return true;
-            }
-            return false;
-        }
+			// 1. Use a standard for-loop to avoid Iterator allocation
+			for (let i = 0; i < collisionObjects.length; i++) {
+				const obj = collisionObjects[i];
+				
+				// 2. Calculate squared distance (dx*dx + dz*dz)
+				// This is MUCH faster than Math.sqrt and Math.pow
+				const dx = newPos.x - obj.pos.x;
+				const dz = newPos.z - obj.pos.z;
+				const distanceSquared = (dx * dx) + (dz * dz);
+				
+				// 3. Compare against the radius squared
+				const radiusSquared = obj.radius * obj.radius;
+				
+				if (distanceSquared < radiusSquared) {
+					return true;
+				}
+			}
+			return false;
+		}
 		
 		// Spawn the initial "boss" skeleton
 		spawnSkeleton(20, 0, 20);
@@ -770,10 +945,22 @@ function spawnSkeleton(x, y, z) {
 		// Spawn the initial "boss" skeleton
 		spawnSkeleton(40, 0, 40);
 		
+		//Setup DWARF VARIABLES
 		let isAttacking = false;
 		let enemyTracked = false;
-
+		let direction = new THREE.Vector3(0, 0, 0);
+		let nextStep = new THREE.Vector3(0, 0, 0);
+		let lookTarget = new THREE.Vector3(0, 0, 0);
+		
+		//Grass VARIABLES
+		let lastGrassUpdatePos = new THREE.Vector3();
+	
+		//Precompile shaders and scene?
+		renderer.compile(scene, camera);
+		
         function animate() {
+		
+			stats.begin(); // START TRACKING
 		
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
@@ -792,8 +979,9 @@ function spawnSkeleton(x, y, z) {
 					// to a previous click location once you stop hovering
 					targetPosition.copy(dwarf.position);
 					
-					isMouseDown = false;
+					fadeTo('idle');
 					
+					isMouseDown = false;
 					enemyTracked = false;
 					
 					if (hoveredObject)
@@ -856,11 +1044,14 @@ function spawnSkeleton(x, y, z) {
 			
 let foundObject = false;
 			
-enemyList.forEach(enemy => {
+for (let i = 0; i < enemyList.length; i++) {
+    const enemy = enemyList[i];
+    //const data = enemy.userData;
+
         const data = enemy.userData;
-        if (!data.mixer) return;
-		if (!dwarf) return;
-		if (!introdone) return;
+        if (!data.mixer) continue;
+		if (!dwarf) continue;
+		if (!introdone) continue;
 
         // 1. UPDATE THE MIXER (The heartbeat of the animation)
         data.mixer.update(delta);
@@ -878,11 +1069,6 @@ enemyList.forEach(enemy => {
         if (data.spawnProgress >= 1) {
             data.isSpawning = false;
             data.hpBar.visible = true; // Show HP bar only when fully spawned
-            
-            // Optional: Disable transparency once finished to save performance
-            enemy.traverse(n => {
-                if (n.isMesh) n.material.transparent = false;
-            });
         }
     }
 
@@ -890,25 +1076,33 @@ enemyList.forEach(enemy => {
 		const distToPlayer = enemy.position.distanceTo(dwarf.position);
 
 		if (!data.isDead) {
-			let separationVec = new THREE.Vector3(0, 0, 0);
+			data.separationVec = data.separationVec.set(0, 0, 0);
 			const personalSpace = 4.0; 
 
-			enemyList.forEach(otherEnemy => {
-				if (enemy === otherEnemy) return; 
+			// Replace the entire enemyList.forEach block with this:
+			for (let j = 0; j < enemyList.length; j++) {
+				const otherEnemy = enemyList[j];
 				
+				// 1. Skip if it's the same enemy (replaces 'return')
+				if (enemy === otherEnemy) continue; 
+				
+				// 2. Optimization: use distanceToSquared to avoid the expensive Square Root math
 				const distToOther = enemy.position.distanceTo(otherEnemy.position);
-				if (!otherEnemy.isDead && distToOther < personalSpace) {
-					let diff = new THREE.Vector3().subVectors(enemy.position, otherEnemy.position);
-					diff.normalize().divideScalar(distToOther); 
-					separationVec.add(diff);
+				
+				// 3. Use the otherEnemy's userData to check if they are dead
+				if (otherEnemy.userData && !otherEnemy.userData.isDead && distToOther < personalSpace) {
+					// We reuse the 'diff' vector already stored in userData to avoid 'new' allocations
+					data.diff.subVectors(enemy.position, otherEnemy.position);
+					data.diff.normalize().divideScalar(distToOther); 
+					data.separationVec.add(data.diff);
 				}
-			});
+			}
 			
 			// --- THE FIX: ZERO OUT THE VERTICAL AXIS ---
-			separationVec.y = 0;
+			data.separationVec.y = 0;
 			
 			// Apply the push so they slide apart
-			enemy.position.addScaledVector(separationVec, 0.1);
+			enemy.position.addScaledVector(data.separationVec, 0.1);
 		}
 		
 		if (data.currentHP <= 0 && !data.isDead) {
@@ -942,6 +1136,7 @@ if (data.isDead) {
 } 
 // 1. ATTACK STATE (Entry at 5, Exit at 6.5)
 else if (distToPlayer < (data.currentAction === data.actions['attack'] ? attackRange + buffer : attackRange)) {
+
     if (data.actions['attack']) fadeEnemy(enemy, 'attack');
     enemy.lookAt(dwarf.position.x, enemy.position.y, dwarf.position.z);
 	
@@ -966,11 +1161,12 @@ else if (distToPlayer < (data.currentAction === data.actions['attack'] ? attackR
 } 
 // 2. CHASE STATE (Entry at 25, Exit at 26.5)
 else if (distToPlayer < (data.currentAction === data.actions['run'] ? chaseRange + buffer : chaseRange)) {
+
     if (data.actions['run']) {
         fadeEnemy(enemy, 'run');
-        const dir = new THREE.Vector3().subVectors(dwarf.position, enemy.position).normalize();
-		dir.y = 0;
-        enemy.position.addScaledVector(dir, 0.12); 
+        data.dir = data.dir.subVectors(dwarf.position, enemy.position).normalize();
+		data.dir.y = 0;
+        enemy.position.addScaledVector(data.dir, 0.12); 
     }
     enemy.lookAt(dwarf.position.x, enemy.position.y, dwarf.position.z);
 } 
@@ -997,7 +1193,7 @@ else {
 		raycaster.setFromCamera(mouseCoords, camera);
 				
 		// Check for the hitbox specifically
-		const hitbox = enemy.getObjectByName("Skeleton_Hitbox");
+		const hitbox = data.cachedHitBox;
 		const intersects = raycaster.intersectObject(hitbox); // No need for 'true' here
 
 		if (!data.isDead && intersects.length > 0) {
@@ -1011,9 +1207,9 @@ else {
 			foundObject = true;
 			hoveredObject = enemy;
 			addOutline(enemy, 2);
-			console.log("--- SKELETON TARGETED ---");
-		} 
-    });
+			//console.log("--- SKELETON TARGETED ---");
+		}
+    }
 	
 	//dont keep releasing the lock when mouse held
 	if (!foundObject && !isMouseDown && !enemyTracked)
@@ -1057,63 +1253,42 @@ else {
           if (lava) lava.material.uniforms.uTime.value = time;
             //hazePass.uniforms.uTime.value = time;
 
-			// 1. Update Grass Uniforms
-			if (grassMaterial) {
+			// Inside your animate() loop:
+			if (grassMaterial && dwarf) {
 				grassMaterial.uniforms.uTime.value = time;
 				
-				// Only update if the dwarf exists
-				if (dwarf) {
-					// We pass the dwarf's position directly to the shader
-					grassMaterial.uniforms.uPlayerPosition.value.copy(dwarf.position);
+				// Only update the "Trample" position if the dwarf has moved more than 0.1 units
+				if (dwarf.position.distanceToSquared(lastGrassUpdatePos) > 0.01) {
+					grassField.material.uniforms.uPlayerPosition.value.set(
+						dwarf.position.x, 
+						dwarf.position.y, 
+						dwarf.position.z
+					);
+					lastGrassUpdatePos.copy(dwarf.position);
 				}
 			}
 
-            if (fireParticles) {
-                const pos = fireParticles.geometry.attributes.position.array;
-                const col = fireParticles.geometry.attributes.color.array;
-                const vels = fireParticles.userData.velocities;
-                for (let i = 0; i < vels.length; i++) {
-                    pos[i * 3 + 1] += vels[i]; 
-                    pos[i * 3] += Math.sin(time * 3 + i) * 0.05;
-                    const h = pos[i * 3 + 1];
-                    const t = THREE.MathUtils.clamp((h - 1.5) / 7.5, 0, 1); 
-                    if (t < 0.3) { col[i * 3] = 1.0; col[i * 3 + 1] = 1.0; col[i * 3 + 2] = 0.5; }
-                    else if (t < 0.7) { col[i * 3] = 1.0; col[i * 3 + 1] = 0.5; col[i * 3 + 2] = 0.0; }
-                    else { col[i * 3] = 0.6; col[i * 3 + 1] = 0.1; col[i * 3 + 2] = 0.0; }
-                    if (pos[i * 3 + 1] > 11) {
-                        pos[i * 3 + 1] = 1.5;
-                        pos[i * 3] = 5 + (Math.random() - 0.5) * 2.5;
-                        pos[i * 3 + 2] = 5 + (Math.random() - 0.5) * 2.5;
-                    }
-                }
-                fireParticles.geometry.attributes.position.needsUpdate = true;
-                fireParticles.geometry.attributes.color.needsUpdate = true;
-            }
+		// Inside animate()
+		if (fireParticles) {
+				fireParticles.material.uniforms.uTime.value = time;
+				// This keeps the fire scaling perfectly with your world zoom
+				fireParticles.material.uniforms.uZoom.value = camera.zoom;
+			}
 			
+			// --- GPU WATERFALL UPDATE ---
 			if (waterfallParticles) {
-				// Lock the pixel size against the camera zoom
-				waterfallParticles.material.size = 5800 * (camera.zoom / d);
-
-				const pos = waterfallParticles.geometry.attributes.position.array;
-				const vels = waterfallParticles.userData.velocities;
-
-				for (let i = 0; i < vels.length; i++) {
-					pos[i * 3 + 1] -= vels[i]; // Vertical fall
-					
-					// Reset Logic (Relative to the waterfall's position)
-					if (pos[i * 3 + 1] < -5) { 
-						pos[i * 3 + 1] = 25; 
-						pos[i * 3] = (Math.random() - 0.5) * 15;   // X Spread
-						pos[i * 3 + 2] = (Math.random() - 0.5) * 5; // Z Spread
-					}
-				}
-				waterfallParticles.geometry.attributes.position.needsUpdate = true;
+				waterfallParticles.material.uniforms.uTime.value = time;
+				waterfallParticles.material.uniforms.uZoom.value = camera.zoom;
 			}
 
-            if (dwarf && mixer) {
+	//DWARF UPDATE LOOP
+	if (dwarf && mixer) 
+	{
     mixer.update(delta);
     const distance = dwarf.position.distanceTo(targetPosition);
 
+	if (distance > 0.1) {
+	
     if (hoveredObject) {
 	
 		const distance = dwarf.position.distanceTo(hoveredObject.position);
@@ -1131,65 +1306,81 @@ else {
 			//keep updating the hovered object position
 			targetPosition.copy(hoveredObject.position);
 		
-			const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+			direction = direction.subVectors(targetPosition, dwarf.position).normalize();
 			
 			// --- THE FIX: Multiply moveSpeed by delta ---
 			// This ensures the distance moved is consistent regardless of FPS
 			const actualMoveSpeed = moveSpeed * delta; 
-			const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
+			nextStep = nextStep.copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
 			
 			if (!checkCollision(nextStep)) {
 				fadeTo('walk'); 
 				dwarf.position.copy(nextStep);
-				dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+				lookTarget = lookTarget.set(targetPosition.x, dwarf.position.y, targetPosition.z);
+				dwarf.lookAt(lookTarget);
 			} else {
 				fadeTo('idle');
 			}
 		}
 		else
 		{
-        fadeTo('idle'); 
-        
-        const lookTarget = new THREE.Vector3(
-            hoveredObject.position.x, 
-            dwarf.position.y, 
-            hoveredObject.position.z
-        );
-        dwarf.lookAt(lookTarget);
-        targetPosition.copy(dwarf.position);
-		enemyTracked = false;
+			fadeTo('idle'); 
+			
+			lookTarget = lookTarget.set(hoveredObject.position.x, dwarf.position.y, hoveredObject.position.z);
+			dwarf.lookAt(lookTarget);
+			targetPosition.copy(dwarf.position);
+			enemyTracked = false;
         }
-		
-    } else if (distance > 1.0) {
-        const direction = new THREE.Vector3().subVectors(targetPosition, dwarf.position).normalize();
+    } 
+	else if (distance > 1.0) {
+        direction = direction.subVectors(targetPosition, dwarf.position).normalize();
         
         // --- THE FIX: Multiply moveSpeed by delta ---
         // This ensures the distance moved is consistent regardless of FPS
         const actualMoveSpeed = moveSpeed * delta; 
-        const nextStep = new THREE.Vector3().copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
+        nextStep = nextStep.copy(dwarf.position).addScaledVector(direction, actualMoveSpeed);
         
         if (!checkCollision(nextStep)) {
             fadeTo('walk'); 
             dwarf.position.copy(nextStep);
-            dwarf.lookAt(new THREE.Vector3(targetPosition.x, dwarf.position.y, targetPosition.z));
+			lookTarget = lookTarget.set(targetPosition.x, dwarf.position.y, targetPosition.z);
+            dwarf.lookAt(lookTarget);
         } else {
             fadeTo('idle');
         }
     } else {
         fadeTo('idle');
     }
+	}
     
     // UI and Camera following
     playerHPBar.position.set(dwarf.position.x, dwarf.position.y + 8, dwarf.position.z);
     updateHPBar(playerHPBar, playerHP, 'green');
 
-    camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
-    controls.target.copy(dwarf.position);
+    //camera.position.set(dwarf.position.x + cameraOffset.x, dwarf.position.y + cameraOffset.y, dwarf.position.z + cameraOffset.z);
+    //controls.target.copy(dwarf.position);
+	
+	// 1. Calculate where the camera SHOULD be
+	const idealX = dwarf.position.x + cameraOffset.x;
+	const idealY = dwarf.position.y + cameraOffset.y;
+	const idealZ = dwarf.position.z + cameraOffset.z;
+
+	// 2. Use a smoothing weight (0.05 is very smooth, 0.2 is snappy)
+	// This decouples the camera from the raw 'delta' jitter
+	const weight = 0.1; 
+
+	camera.position.x += (idealX - camera.position.x) * weight;
+	camera.position.y += (idealY - camera.position.y) * weight;
+	camera.position.z += (idealZ - camera.position.z) * weight;
+
+	// 3. Keep the orbit controls centered on the dwarf
+	controls.target.lerp(dwarf.position, weight);
+	controls.update();
 }
 			
 			
 			//skeleton animation
-				if (skeleton && skeletonMixer) {
+				/*if (skeleton && skeletonMixer) {
 					skeletonMixer.update(delta);
 					const distToPlayer = skeleton.position.distanceTo(dwarf.position);
 
@@ -1235,12 +1426,14 @@ else {
 					
 					updateHPBar(skeletonHPBar, visualSkeletonHP, 'red');
 					updateHPBar(playerHPBar, playerHP, 'green');
-				}
+				}*/
 
 			
 			
             controls.update();
             renderer.render(scene, camera);
+			
+			stats.end();
         }
 		
         animate();
@@ -1321,13 +1514,13 @@ function removeOutline(object) {
     });
 }
 		
-		function fadeSkeletonTo(name) {
+		/*function fadeSkeletonTo(name) {
 				const action = skeletonAnimations[name];
 				if (action && !action.isRunning()) {
 					Object.values(skeletonAnimations).forEach(a => a.fadeOut(0.2));
 					action.reset().fadeIn(0.2).play();
 				}
-			}
+			}*/
 
 		// --- INTRO SEQUENCE FOR THE ANCIENT SANDS ---
 		function runIntro() {

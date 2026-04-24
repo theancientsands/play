@@ -114,7 +114,7 @@
         renderer.outputColorSpace = THREE.SRGBColorSpace; 
 		
 		renderer.shadowMap.enabled = true;
-		renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer, nicer edges
+		renderer.shadowMap.type = THREE.PCFShadowMap; // Softer, nicer edges
 		
         document.body.appendChild(renderer.domElement);
 

@@ -95,6 +95,11 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+		import { EffectComposer } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
+		import { RenderPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
+		import { ShaderPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js';
+		import { OutlinePass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/OutlinePass.js';
+		import { OutputPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/OutputPass.js';
 
         const scene = new THREE.Scene();
         const clock = new THREE.Clock();
@@ -127,6 +132,30 @@
 		camera.position.set(100, 100, 100); 
         camera.lookAt(0, 0, 0);
         const cameraOffset = new THREE.Vector3().copy(camera.position);
+		
+		// 1. Initialize Composer
+		const composer = new EffectComposer(renderer);
+
+		// 2. Base Render Pass
+		const renderPass = new RenderPass(scene, camera);
+		composer.addPass(renderPass);
+
+		// 3. Outline Pass
+		const outlinePass = new OutlinePass(
+			new THREE.Vector2(window.innerWidth, window.innerHeight), 
+			scene, 
+			camera
+		);
+		outlinePass.edgeStrength = 4.0;
+		outlinePass.edgeThickness = 1.5;
+		outlinePass.visibleEdgeColor.set('#ff0000'); // Red selection
+		outlinePass.hiddenEdgeColor.set('#220000');  // Darker red for obscured parts
+		composer.addPass(outlinePass);
+
+		// 4. THE COLOR FIX (OutputPass)
+		// This is the mandatory final step that fixes the SRGB/Gamma issue.
+		const outputPass = new OutputPass();
+		composer.addPass(outputPass);
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableRotate = false; 
@@ -280,24 +309,43 @@
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
                 }
             `,
-            fragmentShader: `
-                uniform float uTime;
-                uniform sampler2D uLavaTexture;
-                uniform sampler2D uNoiseTexture;
-                uniform vec3 uEmissiveColor;
-                varying vec2 vUv;
-                void main() {
-                    vec2 noiseUv = vUv * 1.5;
-                    noiseUv.y -= uTime * 0.1;
-                    vec4 noise = texture2D(uNoiseTexture, noiseUv);
-                    vec2 distUv = vUv;
-                    distUv.x += (noise.r - 0.5) * 0.05;
-                    distUv.y += (noise.g - 0.5) * 0.05 + uTime * 0.01;
-                    vec4 color = texture2D(uLavaTexture, distUv);
-                    float glow = 0.4 + sin(uTime * 0.8) * 0.15;
-                    gl_FragColor = vec4(color.rgb + (uEmissiveColor * glow * color.r), 1.0);
-                }
-            `
+           fragmentShader: `
+    uniform float uTime;
+    uniform sampler2D uLavaTexture;
+    uniform sampler2D uNoiseTexture;
+    uniform vec3 uEmissiveColor;
+    varying vec2 vUv;
+
+    // Convert sRGB colors to Linear space for the Composer
+    vec3 sRGBToLinear(vec3 color) {
+        return pow(color, vec3(2.2));
+    }
+
+    void main() {
+        vec2 noiseUv = vUv * 1.5;
+        noiseUv.y -= uTime * 0.1;
+        vec4 noise = texture2D(uNoiseTexture, noiseUv);
+
+        vec2 distUv = vUv;
+        distUv.x += (noise.r - 0.5) * 0.05;
+        distUv.y += (noise.g - 0.5) * 0.05 + uTime * 0.01;
+
+        // 1. Get the texture color
+        vec4 texColor = texture2D(uLavaTexture, distUv);
+        
+        // 2. Convert textures and uniforms to Linear space
+        // This stops the lava from looking washed out/neon
+        vec3 linearTex = sRGBToLinear(texColor.rgb);
+        vec3 linearEmissive = sRGBToLinear(uEmissiveColor);
+
+        float glow = 0.4 + sin(uTime * 0.8) * 0.15;
+
+        // 3. Combine in Linear space
+        vec3 finalColor = linearTex + (linearEmissive * glow * linearTex.r);
+
+        gl_FragColor = vec4(finalColor, 1.0);
+    }
+`
         });
 
         lava = new THREE.Mesh(new THREE.PlaneGeometry(30, 30, 64, 64), lavaMat);
@@ -463,15 +511,26 @@ function createWaterfall() {
 
 		// 2. THE FRAGMENT SHADER (The "Look")
 		const grassFragmentShader = `
-			varying vec2 vUv;
-			void main() {
-				vec3 baseColor = vec3(0.02, 0.12, 0.02); 
-				vec3 tipColor = vec3(0.3, 0.6, 0.1);
-				float edge = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
-				vec3 finalColor = mix(baseColor, tipColor, vUv.y) * edge;
-				gl_FragColor = vec4(finalColor, 1.0);
-			}
-		`;
+    varying vec2 vUv;
+    
+    // Function to convert sRGB to Linear Space
+    vec3 sRGBToLinear(vec3 color) {
+        return pow(color, vec3(2.2));
+    }
+
+    void main() {
+        // These are the colors you WANT to see on screen
+        vec3 baseColor = sRGBToLinear(vec3(0.02, 0.12, 0.02)); 
+        vec3 tipColor = sRGBToLinear(vec3(0.3, 0.6, 0.1));
+        
+        float edge = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
+        vec3 finalColor = mix(baseColor, tipColor, vUv.y) * edge;
+        
+        gl_FragColor = vec4(finalColor, 1.0);
+        
+        // If your lava is also bright, apply sRGBToLinear to its colors too.
+    }
+`;
 
 		// 3. THE MATERIAL (No hardcoded strings here anymore)
 		const grassMaterial = new THREE.ShaderMaterial({
@@ -887,6 +946,13 @@ function spawnSkeleton(x, y, z) {
 
         // Add to World
         scene.add(skeleton);
+		
+		//precompile outline shader on spawn
+		addOutline(skeleton);
+		composer.render();
+		removeOutline(skeleton);
+		composer.render();
+		
         scene.add(skeleton.userData.hpBar);
         
         // Push to the global list for the animate() loop
@@ -1431,7 +1497,8 @@ else {
 			
 			
             controls.update();
-            renderer.render(scene, camera);
+            //renderer.render(scene, camera);
+			composer.render();
 			
 			stats.end();
         }
@@ -1468,50 +1535,27 @@ else {
 		}
 		
 		
-function addOutline(object, thickness = 1.0) {
-    object.traverse(n => {
-        if (n.isMesh && n.name !== "Skeleton_Hitbox") {
-            if (!n.material.userData.shader) {
-                n.material.onBeforeCompile = (shader) => {
-                    shader.uniforms.uOutlineColor = { value: new THREE.Color(0xff0000) };
-                    shader.uniforms.uHoverActive = { value: 1.0 };
-                    shader.uniforms.uThickness = { value: thickness }; // New uniform
-
-                    shader.fragmentShader = `
-                        uniform vec3 uOutlineColor;
-                        uniform float uHoverActive;
-                        uniform float uThickness;
-                    ` + shader.fragmentShader;
-
-                    shader.fragmentShader = shader.fragmentShader.replace(
-                        `#include <dithering_fragment>`,
-                        `#include <dithering_fragment>
-                        if (uHoverActive > 0.5) {
-                            // Using uThickness here to control the spread
-                            float intensity = pow(1.0 - dot(normalize(vNormal), normalize(vViewPosition)), uThickness) * 1.5;
-                            intensity = smoothstep(0.1, 0.9, intensity); 
-                            gl_FragColor.rgb = mix(gl_FragColor.rgb, uOutlineColor, intensity);
-                        }
-                        `
-                    );
-                    n.material.userData.shader = shader;
-                };
-                n.material.needsUpdate = true;
-            } else {
-                // If shader already exists, just update the values
-                n.material.userData.shader.uniforms.uHoverActive.value = 1.0;
-                n.material.userData.shader.uniforms.uThickness.value = thickness;
-            }
-        }
-    });
+function addOutline(object) {
+    // If outlinepass.selectedobjects can't find the object
+    if (outlinePass.selectedObjects.indexOf(object) === -1) {
+        outlinePass.selectedObjects.push(object);
+        
+        // Refresh the pass so the outline actually appears
+        //outlinePass.selectedObjects = outlinePass.selectedObjects;
+    }
 }
 
 function removeOutline(object) {
-    object.traverse(n => {
-        if (n.isMesh && n.material.userData.shader) {
-            n.material.userData.shader.uniforms.uHoverActive.value = 0.0;
+    // Iterate the selectedobjects to find and remove the object
+    for (let i = 0; i < outlinePass.selectedObjects.length; i++) {
+        if (outlinePass.selectedObjects[i] === object) {
+            outlinePass.selectedObjects.splice(i, 1);
+            
+            // Refresh the pass so the outline disappears
+            outlinePass.selectedObjects = outlinePass.selectedObjects;
+            break; 
         }
-    });
+    }
 }
 		
 		/*function fadeSkeletonTo(name) {

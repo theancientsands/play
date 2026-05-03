@@ -31,6 +31,9 @@
 		
 		//lava.js
 		import { createLavaMaterial } from './lava.js';
+		
+		//reflector.js
+		import { Reflector } from './three/examples/jsm/objects/Reflector.js';
 
         export const scene = new THREE.Scene();
         const clock = new THREE.Timer();
@@ -204,7 +207,7 @@
 			return texture;
 		};
 
-        const waterNormals = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg');
+        /*const waterNormals = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg');
         waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
 		const waterMat = new THREE.MeshPhongMaterial({
 			color: 0x002244,    // Darker base color for more contrast
@@ -226,7 +229,142 @@
 		water.frustumCulled = false;
 		water.matrixAutoUpdate = false;
 		water.updateMatrix(); // Calculate it once, then never again
-        scene.add(water);
+        scene.add(water);*/
+		
+		const geometry = new THREE.CircleGeometry(40, 64);
+		
+		const customShader = { ...Reflector.ReflectorShader };
+		
+				const waterTexture = textureLoader.load('./media/water2.png');
+		waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping;
+
+		// 4. Load and setup the DuDv Map[cite: 1]
+		const dudvMap = textureLoader.load('./media/dudv.jpg');
+		dudvMap.wrapS = dudvMap.wrapT = THREE.RepeatWrapping;
+
+// 2. Assign the vertex and fragment strings (from your previous screenshots)
+customShader.vertexShader = `
+  uniform mat4 textureMatrix;
+varying vec4 vUvRefraction;
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+
+void main() {
+    vUv = uv;
+    vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+    vWorldPosition = worldPosition.xyz;
+    vUvRefraction = textureMatrix * vec4( position, 1.0 );
+    gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}
+`;
+
+// 4. Update the Fragment Shader to include lighting
+customShader.fragmentShader = `
+uniform vec3 color;
+uniform sampler2D tDiffuse;
+uniform sampler2D tDudv;
+uniform sampler2D tWater;
+uniform float time;
+uniform float opacity;
+
+// Manual light uniforms
+uniform vec3 uLightPos;
+uniform vec3 uLightColor;
+uniform float uLightRadius;
+uniform float uLightIntensity;
+
+// Edge fade uniforms
+uniform vec3 uCenter;
+uniform float uMaxRadius;
+uniform float uFadeStart;
+
+varying vec2 vUv;
+varying vec4 vUvRefraction;
+varying vec3 vWorldPosition;
+
+vec3 sRGBToLinear(vec3 col) {
+    return pow(col, vec3(2.2));
+}
+
+void main() {
+    float waveStrength = 0.02;
+    float waveSpeed = 0.03;
+
+    vec2 distortedUv = texture2D( tDudv, vec2( vUv.x + time * waveSpeed, vUv.y ) ).rg * waveStrength;
+    distortedUv = vUv.xy + vec2( distortedUv.x, distortedUv.y + time * waveSpeed );
+    vec2 distortion = ( texture2D( tDudv, distortedUv ).rg * 2.0 - 1.0 ) * waveStrength;
+
+    // --- EDGE FADE CALCULATION ---
+    float distFromCenter = distance(vWorldPosition.xz, uCenter.xz);
+    float edgeFade = 1.0 - smoothstep(uFadeStart, uMaxRadius, distFromCenter);
+
+    // --- LIGHTING ---
+    vec3 ambient = vec3(0.01); 
+    float lightDist = distance(vWorldPosition, uLightPos);
+    float falloff = clamp(1.0 - (lightDist / uLightRadius), 0.0, 1.0);
+    vec3 directLight = uLightColor * (falloff * falloff) * uLightIntensity;
+    vec3 lightFactor = ambient + directLight;
+
+    // --- COLORS ---
+    vec3 waterTex = sRGBToLinear(texture2D( tWater, vUv + distortion ).rgb);
+    vec3 linearColor = sRGBToLinear(color);
+    vec3 litWaterBase = waterTex * linearColor * lightFactor;
+
+    // --- REFLECTION ---
+    vec4 uv = vUvRefraction;
+    uv.xy += distortion;
+    vec4 reflectionBase = texture2DProj( tDiffuse, uv );
+
+    // --- FINAL MIX ---
+    // We multiply the reflection by edgeFade so it doesn't look like a "hard" cutout 
+    // against whatever is behind the transparent water.
+    vec3 fadedReflection = reflectionBase.rgb * edgeFade;
+    vec3 finalRGB = mix( fadedReflection, litWaterBase, 0.4 );
+
+    // Multiply the global opacity by the edge fade for the final alpha
+    gl_FragColor = vec4( finalRGB, opacity * edgeFade );
+}
+`;
+
+
+
+		// 5. Inject the uniform BEFORE constructor[cite: 1]
+		//customShader.uniforms.tDudv = { value: dudvMap };
+		//customShader.uniforms.time = { value: 0 };
+		// 6. Initialize the Reflector[cite: 1]
+		const groundMirror = new Reflector(geometry, {
+			shader: customShader,
+			clipBias: 0,
+			textureWidth: window.innerWidth,
+			textureHeight: window.innerHeight,
+			color: 0xFFFFFF, // Keep base color black to avoid washing out the mix[cite: 1]
+		});
+		
+		
+		// Configure Blending & Transparency explicitly on the material
+		groundMirror.material.transparent = true;
+		//groundMirror.material.blending = THREE.NormalBlending; // Or THREE.NormalBlending
+		
+		// 5. Inject the DuDv map and time into the material uniforms
+		groundMirror.material.uniforms.tWater = { value: waterTexture };
+		groundMirror.material.uniforms.tDudv = { value: dudvMap };
+		groundMirror.material.uniforms.time = { value: 0 };
+		groundMirror.material.uniforms.opacity = { value: 1.0 }; // Control transparency here
+		
+		// Add these to your existing uniforms
+		groundMirror.material.uniforms.uLightPos = { value: new THREE.Vector3(0, 5, 0) };
+		groundMirror.material.uniforms.uLightColor = { value: new THREE.Color(0xffffff) };
+		groundMirror.material.uniforms.uLightRadius = { value: 30.0 };
+		groundMirror.material.uniforms.uLightIntensity = { value: 1.0 };
+		
+		// Add these to your initialization
+		groundMirror.material.uniforms.uCenter = { value: new THREE.Vector3(0, 1, 0) };
+		groundMirror.material.uniforms.uMaxRadius = { value: 40.0 };
+		groundMirror.material.uniforms.uFadeStart = { value: 30.0 }; // Start fading at 30 units
+
+		groundMirror.position.set(0, 1, 0);
+		groundMirror.rotateX(-Math.PI / 2);
+		scene.add(groundMirror);
 
 		const lavaMat = createLavaMaterial();
         lava = new THREE.Mesh(new THREE.PlaneGeometry(30, 30, 64, 64), lavaMat);
@@ -599,8 +737,11 @@ function createFireParticles() {
 			scene.add(fireParticles);
         });
 
-        const skinTex = textureLoader.load('./media/dwarf.jpg');
+        const skinTex = textureLoader.load('./media/knight/material1.png');
         skinTex.flipY = false; skinTex.colorSpace = THREE.SRGBColorSpace;
+		
+		const armorTex = textureLoader.load('./media/knight/material2.png');
+        armorTex.flipY = false; armorTex.colorSpace = THREE.SRGBColorSpace;
 
         function fadeTo(name) {
           const nextAction = animations[name]; // The animation we want to play
@@ -619,24 +760,45 @@ function createFireParticles() {
 			nextAction.reset().fadeIn(0.2).play();
 			currentAction = nextAction; // Update the global tracker
         }
+		
+	   const helmTex = textureLoader.load('./media/knight/Image_0.png');
+	   helmTex.colorSpace = THREE.SRGBColorSpace;
+	   helmTex.needsUpdate = true;
+	   helmTex.flipY = false;
+	   
+	   //FLIP Y NEEDS TO BE TURNED OFF FOR TEXTURES!! By default, Three.js flips textures on the Y-axis when loading them.
 
-        gltfLoader.load('./media/idle.glb', (idleGltf) => {
+        gltfLoader.load('./media/knight/idle.glb', (idleGltf) => {
 			dwarf = idleGltf.scene;
-			dwarf.scale.set(0.1, 0.1, 0.1);
+			dwarf.scale.set(7, 7, 7);
 			
 			// This part is the "Engine" for your character's look
 			dwarf.traverse(n => { 
 				if(n.isMesh) { 
 					// 1. Apply the texture
-					n.material = new THREE.MeshToonMaterial({ map: skinTex }); 
+//					n.material = new THREE.MeshToonMaterial({ map: skinTex }); 
+
+					const name = n.name.toLowerCase();
+					console.log(name);			  
+					
+					const skinMaterial = new THREE.MeshToonMaterial({ map: skinTex });
+					const armorMaterial = new THREE.MeshToonMaterial({ map: armorTex });
+
+					// Apply them as an array
+					if (name == "geometry_0_1")
+					n.material = skinMaterial;
+					if (name == "geometry_0_2")
+						n.material = armorMaterial;
+					//n.material[1] = armorMaterial;
 					
 					// 2. Enable the shadows on the model itself
 					n.castShadow = true;  
 				} 
 			});
 
-			const charLight = new THREE.PointLight(0xffffff, 30, 20, 1.1); 
-			charLight.position.set(0, 150, 0);
+			//Warning different models require different point light settings (for shadow size)
+			const charLight = new THREE.PointLight(0xffffff, 100, 30, 1.1); 
+			charLight.position.set(0, 3, 0);
 
 			charLight.castShadow = true; 
 
@@ -644,6 +806,15 @@ function createFireParticles() {
 			charLight.shadow.normalBias = 0.02; // Prevents "self-shadowing" on the dwarf's skin
 			charLight.shadow.camera.near = 1.0; 
 			charLight.shadow.camera.far = 150;   // Vital fix for the clipping
+			
+			// Tighten the 'view' of the shadow camera
+			charLight.shadow.camera.left = -15;
+			charLight.shadow.camera.right = 15;
+			charLight.shadow.camera.top = 15;
+			charLight.shadow.camera.bottom = -15;
+
+			// Update the projection matrix to apply changes
+			charLight.shadow.camera.updateProjectionMatrix();
 
 			// If you want it even softer/cleaner
 			// Inside your dwarf/charLight setup:
@@ -663,18 +834,122 @@ function createFireParticles() {
 
 			// When loading the walking animation, it just grabs the animation data
 			// It doesn't need to traverse again because it's being applied to the 'dwarf' object above
-			gltfLoader.load('./media/walking.glb', (walkGltf) => { 
+			gltfLoader.load('./media/knight/walking.glb', (walkGltf) => { 
 				animations['walk'] = mixer.clipAction(walkGltf.animations[0]); 
 			});
 			
 			// ADD THE ATTACK HERE
-			gltfLoader.load('./media/attack.glb', (attackGltf) => { 
+			gltfLoader.load('./media/knight/attack.glb', (attackGltf) => { 
 				const attackAction = mixer.clipAction(attackGltf.animations[0]);
 				attackAction.setLoop(THREE.LoopOnce); // Play once per click
 				attackAction.clampWhenFinished = false; // Stay on the last frame if needed
 				animations['attack'] = attackAction; 
 			});
+			
+
+       
+			
+			gltfLoader.load('./media/knight/helmet.glb', (helmGltf) => {
+				const helmet = helmGltf.scene;
+				
+				helmet.traverse(n => { 
+					if(n.isMesh) { 
+					const name = n.name.toLowerCase();
+					console.log(name);	
+					const helmMat = new THREE.MeshToonMaterial({ 
+						map: helmTex,
+						transparent: false,
+						opacity: 1.0,
+						//emissive: new THREE.Color(0xffffff), // The color of the "glow"
+						//emissiveMap: helmTex,                // Use the texture as the glow map
+						//emissiveIntensity: 0.3               // 0.3 provides a "fill", 1.0 is full brightness
+					});
+					if (name === "geometry_0")
+					n.material = helmMat;
+					n.castShadow = false;
+					n.receiveShadow = false;
+					//n.material.emissive.setHex(0xffffff);
+            
+					// Set the brightness
+					//n.material.emissiveIntensity = 0.2; 
+					
+					// Map the texture so the "glow" matches the armor paint
+					//n.material.emissiveMap = helmTex;
+					}
+				});
+				
+				// 1. Find the Head bone inside the dwarf model
+				// Note: Mixamo names often have colons like 'mixamorig:Head'
+				const headBone = dwarf.getObjectByName('mixamorigHead');
+
+				if (headBone) {
+					// 2. Adjust helmet transform relative to the bone
+					// Since the helmet is now a child of the head, (0,0,0) is the center of the head bone
+					helmet.scale.set(70, 70, 70); // Adjust scale to fit
+					helmet.rotation.set(0, 0, 0); // Adjust orientation if it's facing the wrong way
+					helmet.position.set(0, 8, 3); // Adjust height/depth to sit correctly on the head
+
+					// 3. Attach it!
+					headBone.add(helmet);
+					
+					console.log("Helmet attached to head bone.");
+				} else {
+					console.error("Could not find head bone! Check the name in the console.");
+				}
+			});
+			
+			gltfLoader.load('./media/knight/sword.glb', (swordGltf) => {
+				const sword = swordGltf.scene;
+				
+				sword.traverse(n => { 
+					if(n.isMesh) { 
+					const name = n.name.toLowerCase();
+					console.log(name);	
+					const helmMat = new THREE.MeshToonMaterial({ 
+						map: helmTex,
+						transparent: false,
+						opacity: 1.0,
+						//emissive: new THREE.Color(0xffffff), // The color of the "glow"
+						//emissiveMap: helmTex,                // Use the texture as the glow map
+						//emissiveIntensity: 0.3               // 0.3 provides a "fill", 1.0 is full brightness
+					});
+					if (name === "geometry_0")
+					//n.material = helmMat;
+					n.castShadow = false;
+					n.receiveShadow = false;
+					//n.material.emissive.setHex(0xffffff);
+            
+					// Set the brightness
+					//n.material.emissiveIntensity = 0.2; 
+					
+					// Map the texture so the "glow" matches the armor paint
+					//n.material.emissiveMap = helmTex;
+					}
+				});
+				
+				// 1. Find the Head bone inside the dwarf model
+				// Note: Mixamo names often have colons like 'mixamorig:Head'
+				const righthandBone = dwarf.getObjectByName('mixamorigRightHand');
+
+				if (righthandBone) {
+					// 2. Adjust helmet transform relative to the bone
+					// Since the helmet is now a child of the head, (0,0,0) is the center of the head bone
+					sword.scale.set(70, 70, 70); // Adjust scale to fit
+					sword.rotation.set(-20, 20, 0); // Adjust orientation if it's facing the wrong way
+					sword.position.set(2, 12, -22); // Adjust height/depth to sit correctly on the head
+
+					// 3. Attach it!
+					righthandBone.add(sword);
+					
+					console.log("sword attached to right hand bone.");
+				} else {
+					console.error("Could not find right hand bone! Check the name in the console.");
+				}
+			});
+			
 		});
+		
+		
 		
 		//skeleton
 		
@@ -917,7 +1192,8 @@ function spawnSkeleton(x, y, z) {
 		let direction = new THREE.Vector3(0, 0, 0);
 		let nextStep = new THREE.Vector3(0, 0, 0);
 		let lookTarget = new THREE.Vector3(0, 0, 0);
-		
+		let firstHit = false;
+	
 		//Grass VARIABLES
 		let lastGrassUpdatePos = new THREE.Vector3();
 	
@@ -994,9 +1270,14 @@ function spawnSkeleton(x, y, z) {
 					animations['attack'].setLoop(THREE.LoopOnce);
 					//fadeTo('attack');
 					
+					lookTarget = lookTarget.set(hoveredObject.position.x, dwarf.position.y, hoveredObject.position.z);
+					dwarf.lookAt(lookTarget);
+					
+					let targetObject = hoveredObject;
+					
 					setTimeout(() => {
-						if (hoveredObject && hoveredObject.userData.currentHP > 0) {
-							hoveredObject.userData.currentHP -= 20; // Damage amount
+						if (targetObject && targetObject.userData.currentHP > 0) {
+							targetObject.userData.currentHP -= 20; // Damage amount
 						}
 					}, 400);
 					
@@ -1045,7 +1326,7 @@ for (let i = 0; i < enemyList.length; i++) {
         // 2. DISTANCE & SEPARATION (Prevents walking into each other)
 		const distToPlayer = enemy.position.distanceTo(dwarf.position);
 
-		if (!data.isDead) {
+		if (!data.isDead && !data.isSpawning) {
 			data.separationVec = data.separationVec.set(0, 0, 0);
 			const personalSpace = 4.0; 
 
@@ -1057,12 +1338,21 @@ for (let i = 0; i < enemyList.length; i++) {
 				if (enemy === otherEnemy) continue; 
 				
 				// 2. Optimization: use distanceToSquared to avoid the expensive Square Root math
-				const distToOther = enemy.position.distanceTo(otherEnemy.position);
+				let distToOther = enemy.position.distanceTo(otherEnemy.position);
 				
 				// 3. Use the otherEnemy's userData to check if they are dead
 				if (otherEnemy.userData && !otherEnemy.userData.isDead && distToOther < personalSpace) {
 					// We reuse the 'diff' vector already stored in userData to avoid 'new' allocations
 					data.diff.subVectors(enemy.position, otherEnemy.position);
+					
+					// --- FIX STARTS HERE ---
+					if (distToOther === 0) {
+						// If they are exactly on top of each other, 
+						// give them a random nudge so the math works next frame.
+						data.diff.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+						distToOther = 0.1; // Pretend they are slightly apart
+					}
+					
 					data.diff.normalize().divideScalar(distToOther); 
 					data.separationVec.add(data.diff);
 				}
@@ -1227,6 +1517,12 @@ else {
                 water.material.normalMap.offset.x = time * 0.05;
                 water.material.normalMap.offset.y = time * 0.05;
             }
+			
+			if (groundMirror && dwarf) 
+			{
+				groundMirror.material.uniforms.time.value = time;
+				groundMirror.material.uniforms.uLightPos.value.copy(dwarf.position);
+			}
 
           if (lava) lava.material.uniforms.uTime.value = time;
             //hazePass.uniforms.uTime.value = time;
@@ -1291,7 +1587,6 @@ else {
 		const dynamicRange = isAttacking ? (attackRange + exitBuffer) : attackRange;
 
 		if (enemyTracked && distance > dynamicRange) {
-		
 			//keep updating the hovered object position
 			targetPosition.copy(hoveredObject.position);
 		
@@ -1315,15 +1610,69 @@ else {
 		}
 		else
 		{
+			if (enemyTracked && !firstHit)
+			{
+				if (hoveredObject && dwarf && animations['attack'] && !isAttacking && !hoveredObject.userData.isDead) {
+						animations['walk'].reset().stop();
+						const distToEnemy = dwarf.position.distanceTo(hoveredObject.position);
+						
+						const attackRange = 5.0; // The distance needed to START the attack
+						const exitBuffer = 2.0;  // How much further they can move before the attack "breaks"
+
+						// Calculate the "Active Range": 
+						// If we are already attacking, the range is effectively 7.0 (5 + 2).
+						// If we are just walking up, the range is 5.0.
+						const dynamicRange = isAttacking ? (attackRange + exitBuffer) : attackRange;
+
+						if (distToEnemy < dynamicRange) {
+						isAttacking = true;
+						//fadeTo('idle'); 
+						
+						// Make the dwarf face the skeleton even while standing still
+						const dx = hoveredObject.position.x - dwarf.position.x;
+						const dz = hoveredObject.position.z - dwarf.position.z;
+						dwarf.rotation.y = Math.atan2(dx, dz);
+						// Just trigger the animation. Let the animate loop handle the "Facing"
+						animations['attack'].reset().play();
+						animations['attack'].setLoop(THREE.LoopOnce);
+						//fadeTo('attack');
+						
+						lookTarget = lookTarget.set(hoveredObject.position.x, dwarf.position.y, hoveredObject.position.z);
+						dwarf.lookAt(lookTarget);
+						
+						let targetObject = hoveredObject;
+						
+						setTimeout(() => {
+							if (targetObject && targetObject.userData.currentHP > 0) {
+								targetObject.userData.currentHP -= 20; // Damage amount
+							}
+						}, 400);
+						
+						setTimeout(() => {
+													isAttacking = false;
+						}, 1000);
+						}
+						else
+						{
+							targetPosition.copy(hoveredObject.position);
+							enemyTracked = true;
+						}
+				}
+				firstHit = true;
+			}
+			else
+			{
 			fadeTo('idle'); 
 			
-			lookTarget = lookTarget.set(hoveredObject.position.x, dwarf.position.y, hoveredObject.position.z);
-			dwarf.lookAt(lookTarget);
+			//lookTarget = lookTarget.set(hoveredObject.position.x, dwarf.position.y, hoveredObject.position.z);
+			//dwarf.lookAt(lookTarget);
 			targetPosition.copy(dwarf.position);
 			enemyTracked = false;
+			}
         }
     } 
 	else if (distance > 1.0) {
+		firstHit = false;
 		animations['attack'].stop();
         direction = direction.subVectors(targetPosition, dwarf.position).normalize();
         
@@ -1341,6 +1690,7 @@ else {
             fadeTo('idle');
         }
     } else {
+		firstHit = false;
 		animations['attack'].stop();
         fadeTo('idle');
     }

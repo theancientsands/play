@@ -8,7 +8,6 @@
 		lavaTex.wrapS = lavaTex.wrapT = THREE.RepeatWrapping;
 		noiseTex.wrapS = noiseTex.wrapT = THREE.RepeatWrapping;
 	
-	
         return new THREE.ShaderMaterial({		
             uniforms: {
                 uTime: { value: 0 },

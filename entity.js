@@ -92,7 +92,7 @@ export function spawnEntity(name, x, y, z) {
             actions[key] = action;
         }
 		
-		entity.name = name;
+		entity.name = name + "_" + enemyList.length.toString();
 
         // Setup Data Object
         entity.userData = {
@@ -149,6 +149,11 @@ export function respawnEntity(name, x, y, z) {
         data.isDead = false;
         data.isSpawning = true; // Or true if you want the fade-in again
         data.spawnProgress = 0;
+		data.isAttacking = false;
+		
+		data.separationVec = data.separationVec.set(0, 0, 0);
+		data.dir = data.dir.set(0, 0, 0);
+		data.diff = data.diff.set(0, 0, 0);
 
         // 2. Reset Physics & Visuals
         dormantEntity.position.set(x, y, z);
